@@ -1,5 +1,0 @@
-sources:
-  github:
-    repositories:
-      dagster-io:
-        - dagster

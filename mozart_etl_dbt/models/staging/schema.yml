@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: "Staged customer data from source"
+    columns:
+      - name: customer_id
+        description: "Customer identifier"
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_orders
+    description: "Staged order data from source"
+    columns:
+      - name: order_id
+        description: "Order identifier"
+        tests:
+          - unique
+          - not_null

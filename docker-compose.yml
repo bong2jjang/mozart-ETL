@@ -1,0 +1,91 @@
+version: "3.8"
+
+services:
+  # ──────────────────────────────────────────────
+  # MinIO (S3-compatible object storage)
+  # ──────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: mozart-minio
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console UI
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb --ignore-existing local/mozart-data;
+      mc mb --ignore-existing local/mozart-iceberg;
+      echo 'Buckets created successfully';
+      "
+
+  # ──────────────────────────────────────────────
+  # Iceberg REST Catalog
+  # ──────────────────────────────────────────────
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: mozart-iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://mozart-iceberg/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────────
+  # Trino (Query Engine)
+  # ──────────────────────────────────────────────
+  trino:
+    image: trinodb/trino:latest
+    container_name: mozart-trino
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docker/trino/catalog:/etc/trino/catalog
+    depends_on:
+      - iceberg-rest
+      - minio
+
+  # ──────────────────────────────────────────────
+  # Sample PostgreSQL (Dev tenant source DB)
+  # ──────────────────────────────────────────────
+  postgres-sample:
+    image: postgres:16
+    container_name: mozart-postgres-sample
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: sample_tenant
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+volumes:
+  minio-data:
+  postgres-data:

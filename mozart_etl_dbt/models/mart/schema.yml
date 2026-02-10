@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: mart_customer_orders
+    description: "Customer order summary mart table"
+    columns:
+      - name: customer_id
+        description: "Customer identifier"
+        tests:
+          - unique
+          - not_null
+      - name: total_orders
+        description: "Total number of orders per customer"

@@ -1,0 +1,17 @@
+tenants:
+  - id: sample
+    name: "Sample Tenant (Dev)"
+    source:
+      type: postgresql
+      host: "${TENANT_SAMPLE_DB_HOST:localhost}"
+      port: "${TENANT_SAMPLE_DB_PORT:5433}"
+      database: "${TENANT_SAMPLE_DB_NAME:sample_tenant}"
+      username: "${TENANT_SAMPLE_DB_USER:dev}"
+      password: "${TENANT_SAMPLE_DB_PASSWORD:dev}"
+    storage:
+      bucket: mozart-data
+      prefix: "raw/sample"
+    iceberg:
+      catalog: iceberg
+      schema: sample
+    schedule: "0 */2 * * *"

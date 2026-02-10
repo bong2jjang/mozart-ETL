@@ -1,0 +1,29 @@
+version: 2
+
+sources:
+  - name: raw_sample
+    description: "Raw data extracted from sample tenant"
+    schema: sample
+    database: iceberg
+    tables:
+      - name: customers
+        description: "Customer master data"
+        columns:
+          - name: id
+            description: "Primary key"
+            tests:
+              - unique
+              - not_null
+          - name: updated_at
+            description: "Last update timestamp"
+
+      - name: orders
+        description: "Order transactions"
+        columns:
+          - name: order_id
+            description: "Primary key"
+            tests:
+              - unique
+              - not_null
+          - name: created_at
+            description: "Order creation timestamp"
