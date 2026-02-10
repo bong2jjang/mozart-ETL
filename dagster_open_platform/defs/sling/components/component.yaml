@@ -1,0 +1,102 @@
+type: dagster_open_platform.lib.ProdDbReplicationsComponent
+
+attributes:
+  config_dir: ../configs/cloud_product
+  replications:
+    - name: low_volume
+      shards: [xregion, main, shard1]
+      cron_schedule: "0 */2 * * *"
+      last_update_freshness_check:
+        days: 1
+
+    - name: full_refresh
+      shards: [main]
+      cron_schedule: "0 */2 * * *"
+
+    - name: high_volume
+      shards: [main, shard1]
+
+    - name: event_log
+      shards: [main, shard1]
+      last_update_freshness_check:
+        minutes: 30
+
+    - name: user_event_log
+      shards: [main, shard1]
+      cron_schedule: "@daily"
+
+    - name: runs
+      shards: [main, shard1]
+
+    - name: audit_log
+      shards: [main, shard1]
+      last_update_freshness_check:
+        minutes: 30
+
+---
+
+type: dagster_open_platform.lib.EgressReplicationComponent
+
+attributes:
+  config_dir: ../configs/reporting_db
+  replications:
+    - name: usage_metrics_daily_jobs_aggregated
+      deps:
+        - "{{ dbt_asset_key('usage_metrics_daily_jobs_aggregated') }}"
+
+    - name: salesforce_contract_info
+      deps:
+        - "{{ dbt_asset_key('reporting_contract_info') }}"
+    
+    - name: enterprise_contract_metadata
+      deps:
+        - "{{ dbt_asset_key('current_credit_utilization') }}"
+
+---
+
+type: dagster_sling.SlingReplicationCollectionComponent
+template_vars_module: dagster_open_platform.defs.sling.py.template_vars
+
+attributes:
+  connections:
+    COMPASS_STAGING_POSTGRES:
+      type: postgres
+      host: '{{ env.COMPASS_STAGING_POSTGRES_HOST }}'
+      user: '{{ env.COMPASS_STAGING_POSTGRES_USER }}'
+      password: '{{ env.COMPASS_STAGING_POSTGRES_PASSWORD }}'
+      database: '{{ env.COMPASS_STAGING_POSTGRES_DBNAME }}'
+      sslmode: 'require'
+    COMPASS_POSTGRES:
+      type: postgres
+      host: '{{ env.COMPASS_POSTGRES_HOST }}'
+      user: '{{ env.COMPASS_POSTGRES_USER }}'
+      password: '{{ env.COMPASS_POSTGRES_PASSWORD }}'
+      database: '{{ env.COMPASS_POSTGRES_DBNAME }}'      
+      sslmode: 'require'
+    SNOWFLAKE:
+      type: snowflake
+      host: '{{ env.SNOWFLAKE_ACCOUNT }}'
+      user: '{{ env.SNOWFLAKE_SLING_USER }}'
+      authenticator: 'snowflake_jwt'
+      private_key: '{{ env.SNOWFLAKE_SLING_PRIVATE_KEY }}'
+      database: 'sling'
+      schema: 'compass'
+      warehouse: 'purina'
+      role: 'sling_writer'
+
+  replications:
+    - path: ../configs/compass/prod_replication.yaml
+      translation:
+        group_name: 'compass_analytics'
+        kinds: ['sling', 'snowflake']
+        key: '{{ stream_definition.config.object.replace(".", "/") }}'
+        metadata:
+          dagster/table_name: '{{ stream_definition.config.object }}'
+
+    - path: ../configs/compass/staging_replication.yaml
+      translation:
+        group_name: 'staging_compass_analytics'
+        kinds: ['sling', 'snowflake']
+        key: '{{ stream_definition.config.object.replace(".", "/") }}'
+        metadata:
+          dagster/table_name: '{{ stream_definition.config.object }}'

@@ -1,0 +1,164 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dagster-open-platform"
+version = "0.0.1"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "boto3",
+    "dbt-core==1.11.1",
+    "dbt-snowflake==1.11.1",
+    "dagster==1.12.11",
+    "dagster-dg-cli",
+    "dagster-cloud",
+    "dagster-cloud-cli",
+    "dagster-webserver",
+    "dagster-graphql",
+    "dagster-pipes",
+    # integrations
+    "dagster-aws",
+    "dagster-dbt==0.28.11", # synced with dagster above, backtracked when unpinned
+    "dagster-dlt",
+    "dagster-fivetran",
+    "dagster-gcp",
+    "dagster-pandas",
+    "dagster-shared",
+    "dagster-slack",
+    "dagster-sling",
+    "dagster-snowflake",
+    "dagster-omni",
+    # community integrations
+    "dagster-hightouch",
+    "dagster-anthropic",
+    # additional dependencies
+    "sling==1.5.1",
+    "statsig",
+    "gql[requests]",
+    "dlt[snowflake,duckdb]==1.11.0",
+    "protobuf==6.33.4",
+    "pydantic",
+    "pyyaml",
+    "pyOpenSSL>=23.0.0", # https://dagsterlabs.slack.com/archives/C082K86U53Q/p1732735564080519
+    "snowflake-connector-python[secure-local-storage,pandas]",
+    "psycopg2-binary",
+    "scoutos",
+    "psutil>=7.0.0",
+    "certifi==2025.1.31",
+    "scikit-learn",
+    "shap>=0.47.0",
+    "xgboost",
+    "sling-mac-arm64; sys_platform == 'darwin'",
+    "sling_linux_arm64; sys_platform == 'linux'",
+    "deepdiff>=8.6.1", # https://github.com/dagster-io/internal/security/dependabot/609
+    "urllib3>=2.6.3",
+    "aiohttp>=3.13.3",
+    "pyasn1>=0.6.2",
+    "filelock>=3.20.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "click",
+    "pytest",
+    "sqlfluff>=3",
+    "sqlfluff-templater-dbt",
+    "sprocketship",
+    "pyright",
+]
+
+tests = [
+    "mock>=5.2.0",
+    "pytest",
+    "responses",
+    "syrupy",
+    "flaky",
+]
+
+
+[tool.setuptools.packages.find]
+exclude = ["dagster_open_platform_tests"]
+
+[tool.uv.sources]
+erk = { git = "https://github.com/dagster-io/erk.git", rev = "master" }
+
+# ########################
+# ##### DAGSTER
+# ########################
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "dagster_open_platform"
+registry_modules = [
+    "dagster_open_platform.lib.*",
+]
+[tool.dg.cli]
+suppress_warnings = [
+    "project_and_activated_venv_mismatch",
+]
+
+# ########################
+# ##### SQLFLUFF
+# ########################
+
+[tool.sqlfluff.core]
+templater = "dbt"
+dialect = "snowflake"
+exclude_rules = [
+    "aliasing.unique.column",
+    "ambiguous.column_count",
+    "structure.column_order",
+    "structure.using",
+    "references.consistent",
+    "references.qualification",
+]
+max_line_length = 100
+nocolor = true
+# Warn on the use of keywords as identifiers
+warnings = "RF04"
+large_file_skip_byte_limit = 35000
+
+[tool.sqlfluff.templater.dbt]
+project_dir = "./dagster_open_platform_dbt"
+profiles_dir = "./dagster_open_platform_dbt"
+
+[tool.sqlfluff.templater.jinja]
+apply_dbt_builtins = true
+load_macros_from_path = "./dagster_open_platform_dbt/macros"
+
+[tool.sqlfluff.indentation]
+tab_space_size = 4
+
+[tool.sqlfluff.rules.capitalisation.keywords]
+capitalisation_policy = "lower"
+
+[tool.sqlfluff.rules.capitalisation.identifiers]
+capitalisation_policy = "lower"
+
+[tool.sqlfluff.rules.capitalisation.functions]
+extended_capitalisation_policy = "lower"
+
+[tool.sqlfluff.rules.capitalisation.literals]
+capitalisation_policy = "lower"
+
+[tool.sqlfluff.rules.capitalisation.types]
+extended_capitalisation_policy = "lower"
+
+
+# ########################
+# ##### PYRIGHT
+# ########################
+
+# separated from the repo root config since we use
+# published dagster modules in the platform
+
+[tool.pyright]
+
+include = ['.']
+exclude = []
+
+reportPrivateImportUsage = false
+useLibraryCodeForTypes = false

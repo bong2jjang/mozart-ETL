@@ -1,0 +1,37 @@
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables (secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# dbt
+dagster_open_platform_dbt/target/
+dagster_open_platform_dbt/logs/
+dagster_open_platform_dbt/dbt_packages/
+
+# Dagster
+.tmp_dagster_home*/
+storage/
+history/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code memory (personal)
+.claude/projects/

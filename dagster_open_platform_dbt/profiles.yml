@@ -1,0 +1,98 @@
+---
+dagster_open_platform:
+  target: "{{ env_var('DBT_TARGET', 'personal') }}"
+  outputs:
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+
+      user: "{{ env_var('SNOWFLAKE_DBT_USER', '') }}"
+      private_key: "{{ env_var('SNOWFLAKE_DBT_PRIVATE_KEY', '') }}"
+
+      role: "purina"
+      database: "purina"
+      warehouse: "purina"
+      schema: "public"
+      threads: 8
+      client_session_keep_alive: false
+
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+
+      user: purina
+      private_key: "{{ env_var('SNOWFLAKE_DBT_PRIVATE_KEY', '') }}"
+
+      role: "purina"
+      database: "purina_dev"
+      warehouse: "purina"
+      schema: "public"
+      threads: 8
+      client_session_keep_alive: false
+
+    branch_deployment:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+
+      user: "purina"
+      private_key: "{{ env_var('SNOWFLAKE_DBT_PRIVATE_KEY', '') }}"
+
+      role: "purina"
+      database: "purina_clone_{{ env_var('DAGSTER_CLOUD_PULL_REQUEST_ID', '') }}"
+      warehouse: "purina"
+      schema: "public"
+      threads: 8
+      client_session_keep_alive: false
+
+    purina_ci:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+
+      user: "purina"
+      private_key: "{{ env_var('SNOWFLAKE_DBT_PRIVATE_KEY', '') }}"
+
+      role: "purina"
+      database: "purina_ci"
+      warehouse: "purina"
+      schema: "public"
+      threads: 8
+      client_session_keep_alive: false
+
+    ci:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+      user: BUILDKITE_LINT
+      password: "{{ env_var('SNOWFLAKE_BUILDKITE_LINT_PASSWORD', '') }}"
+      database: purina
+      warehouse: elementl
+      schema: public
+
+    sdf:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+
+      user: "{{ env_var('SNOWFLAKE_USER', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', '') }}"
+      authenticator: externalbrowser
+
+      role: "purina"
+      database: "purina"
+      warehouse: "purina"
+      schema: "public"
+      threads: 1
+      client_session_keep_alive: false
+
+    personal:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+
+      user: "{{ env_var('SNOWFLAKE_USER', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', '') }}"
+      authenticator: externalbrowser
+
+      database: "sandbox"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'elementl') }}"
+      
+      schema: "{{ env_var('SANDBOX_SCHEMA_NAME', '') }}"
+      threads: 1
+      client_session_keep_alive: false
