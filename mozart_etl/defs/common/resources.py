@@ -3,7 +3,7 @@ import os
 import dagster as dg
 from dagster.components import definitions
 
-from mozart_etl.lib.storage.minio import MinIOResource
+from mozart_etl.lib.storage.minio import S3Resource
 
 
 class TrinoResource(dg.ConfigurableResource):
@@ -14,6 +14,7 @@ class TrinoResource(dg.ConfigurableResource):
     catalog: str = os.getenv("TRINO_CATALOG", "iceberg")
     schema_name: str = os.getenv("TRINO_SCHEMA", "default")
     user: str = os.getenv("TRINO_USER", "trino")
+    http_scheme: str = os.getenv("TRINO_HTTP_SCHEME", "http")
 
     def get_connection(self):
         from trino.dbapi import connect
@@ -24,6 +25,7 @@ class TrinoResource(dg.ConfigurableResource):
             catalog=self.catalog,
             schema=self.schema_name,
             user=self.user,
+            http_scheme=self.http_scheme,
         )
 
     def execute(self, sql: str, params=None) -> list:
@@ -44,12 +46,12 @@ class TrinoResource(dg.ConfigurableResource):
             conn.close()
 
 
-minio = MinIOResource(
-    endpoint_url=os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
-    access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-    secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
-    region=os.getenv("MINIO_REGION", "us-east-1"),
-    bucket=os.getenv("MINIO_BUCKET", "mozart-data"),
+s3 = S3Resource(
+    endpoint_url=os.getenv("S3_ENDPOINT_URL", ""),
+    access_key=os.getenv("AWS_ACCESS_KEY_ID", ""),
+    secret_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
+    region=os.getenv("AWS_REGION", "us-east-1"),
+    bucket=os.getenv("S3_BUCKET_NAME", "data-lake"),
 )
 
 trino = TrinoResource(
@@ -58,6 +60,7 @@ trino = TrinoResource(
     catalog=os.getenv("TRINO_CATALOG", "iceberg"),
     schema_name=os.getenv("TRINO_SCHEMA", "default"),
     user=os.getenv("TRINO_USER", "trino"),
+    http_scheme=os.getenv("TRINO_HTTP_SCHEME", "http"),
 )
 
 
@@ -65,7 +68,8 @@ trino = TrinoResource(
 def defs() -> dg.Definitions:
     return dg.Definitions(
         resources={
-            "minio": minio,
+            "s3": s3,
+            "minio": s3,  # backward compatibility alias
             "trino": trino,
         },
     )

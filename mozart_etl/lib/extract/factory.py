@@ -6,7 +6,7 @@ import yaml
 from jinja2 import Template
 
 from mozart_etl.lib.extract.connectors import create_connector
-from mozart_etl.lib.storage.minio import MinIOResource
+from mozart_etl.lib.storage.minio import S3Resource
 
 
 def _resolve_env_vars(value: str) -> str:
@@ -110,16 +110,25 @@ class TenantPipelineFactory:
                 tenant.get("schedule", "0 */2 * * *")
             ),
         )
-        def _extract(context: dg.AssetExecutionContext, minio: MinIOResource):
+        def _extract(context: dg.AssetExecutionContext, s3: S3Resource):
             connector = create_connector(source_config)
             try:
+                # Build tenant-level filters from params + table's tenant_filter
+                filters = None
+                tenant_filter_col = table.get("tenant_filter")
+                tenant_params = tenant.get("params", {})
+                if tenant_filter_col and tenant_filter_col in tenant_params:
+                    filters = {tenant_filter_col: tenant_params[tenant_filter_col]}
+
                 arrow_table = connector.extract_table(
                     schema=table["source_schema"],
                     table=table["source_table"],
+                    columns=table.get("columns"),
                     incremental_column=table.get("incremental_column"),
+                    filters=filters,
                 )
 
-                s3_path = minio.write_parquet(
+                s3_path = s3.write_parquet(
                     table=arrow_table,
                     prefix=storage_config["prefix"],
                     table_name=table_name,

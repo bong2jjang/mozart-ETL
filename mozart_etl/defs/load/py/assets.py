@@ -1,17 +1,17 @@
-"""Load assets: Create Iceberg tables from Parquet files in MinIO via Trino."""
+"""Load assets: Create Iceberg tables from Parquet files in S3 via Trino."""
 
 import dagster as dg
 from dagster.components import definitions
 
 from mozart_etl.defs.common.resources import TrinoResource
 from mozart_etl.lib.extract.factory import load_tables_config, load_tenants_config
-from mozart_etl.lib.storage.minio import MinIOResource
+from mozart_etl.lib.storage.minio import S3Resource
 
 
 def build_load_assets() -> list[dg.AssetsDefinition]:
     """Create load assets for each tenant x table combination.
 
-    Each asset reads Parquet from MinIO and creates/refreshes an Iceberg table
+    Each asset reads Parquet from S3 and creates/refreshes an Iceberg table
     via Trino's CREATE TABLE AS SELECT or INSERT INTO.
     """
     tenants = load_tenants_config()
@@ -47,7 +47,7 @@ def _create_load_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
         },
         automation_condition=dg.AutomationCondition.eager(),
     )
-    def _load(context: dg.AssetExecutionContext, trino: TrinoResource, minio: MinIOResource):
+    def _load(context: dg.AssetExecutionContext, trino: TrinoResource, s3: S3Resource):
         bucket = storage_config["bucket"]
         prefix = storage_config["prefix"]
         s3_path = f"s3a://{bucket}/{prefix}/{table_name}/"
@@ -58,7 +58,6 @@ def _create_load_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
         full_table = f"iceberg.{iceberg_schema}.{table_name}"
 
         if table.get("mode") == "incremental":
-            # For incremental: create external table pointing to Parquet location
             trino.execute_ddl(f"""
                 CREATE TABLE IF NOT EXISTS {full_table} (
                     dummy VARCHAR
@@ -69,7 +68,6 @@ def _create_load_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
             """)
             context.log.info(f"Iceberg table {full_table} synced from {s3_path}")
         else:
-            # Full refresh: drop and recreate
             trino.execute_ddl(f"DROP TABLE IF EXISTS {full_table}")
             trino.execute_ddl(f"""
                 CREATE TABLE {full_table}

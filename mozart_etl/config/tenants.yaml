@@ -1,17 +1,38 @@
 tenants:
-  - id: sample
-    name: "Sample Tenant (Dev)"
+  - id: project_01
+    name: "PROJECT_01 (APS)"
     source:
       type: postgresql
-      host: "${TENANT_SAMPLE_DB_HOST:localhost}"
-      port: "${TENANT_SAMPLE_DB_PORT:5433}"
-      database: "${TENANT_SAMPLE_DB_NAME:sample_tenant}"
-      username: "${TENANT_SAMPLE_DB_USER:dev}"
-      password: "${TENANT_SAMPLE_DB_PASSWORD:dev}"
+      host: "${PROJECT_01_DB_HOST:localhost}"
+      port: "${PROJECT_01_DB_PORT:5432}"
+      database: "${PROJECT_01_DB_NAME:mzc_aps}"
+      username: "${PROJECT_01_DB_USER:mzcadm}"
+      password: "${PROJECT_01_DB_PASSWORD:mzcadm}"
+    params:
+      project_id: "EED70012-E49D-4BA5-AD05-870C338DF39A"
     storage:
-      bucket: mozart-data
-      prefix: "raw/sample"
+      bucket: "${S3_BUCKET_NAME:data-lake}"
+      prefix: "raw/project_01"
     iceberg:
       catalog: iceberg
-      schema: sample
+      schema: project_01
+    schedule: "0 */2 * * *"
+
+  - id: project_02
+    name: "PROJECT_02 (APS)"
+    source:
+      type: postgresql
+      host: "${PROJECT_01_DB_HOST:localhost}"
+      port: "${PROJECT_01_DB_PORT:5432}"
+      database: "${PROJECT_01_DB_NAME:mzc_aps}"
+      username: "${PROJECT_01_DB_USER:mzcadm}"
+      password: "${PROJECT_01_DB_PASSWORD:mzcadm}"
+    params:
+      project_id: "EED70012-E49D-4BA5-AD05-870C338DF39A"
+    storage:
+      bucket: "${S3_BUCKET_NAME:data-lake}"
+      prefix: "raw/project_02"
+    iceberg:
+      catalog: iceberg
+      schema: project_02
     schedule: "0 */2 * * *"

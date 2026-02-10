@@ -1,14 +1,22 @@
 tables:
-  - name: customers
+  - name: cfg_item_master
     source_schema: public
-    source_table: customers
-    primary_key: [id]
-    incremental_column: updated_at
-    mode: incremental
-
-  - name: orders
-    source_schema: public
-    source_table: orders
-    primary_key: [order_id]
-    incremental_column: created_at
+    source_table: cfg_item_master
+    primary_key: [project_id, item_id]
+    columns:
+      - project_id
+      - item_id
+      - item_type
+      - item_name
+      - item_group_id
+      - description
+      - item_priority
+      - procurement_type
+      - prod_type
+      - item_size_type
+      - item_spec
+      - create_datetime
+      - update_datetime
+    tenant_filter: project_id
+    incremental_column: update_datetime
     mode: incremental

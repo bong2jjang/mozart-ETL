@@ -30,8 +30,10 @@ class BaseConnector(ABC):
         self,
         schema: str,
         table: str,
+        columns: list[str] | None = None,
         incremental_column: str | None = None,
         last_value: str | None = None,
+        filters: dict[str, str] | None = None,
         limit: int | None = None,
     ) -> pa.Table:
         """Extract a table from the source database into a PyArrow Table.
@@ -39,8 +41,10 @@ class BaseConnector(ABC):
         Args:
             schema: Source schema name.
             table: Source table name.
+            columns: Specific columns to select (None = all).
             incremental_column: Column to use for incremental loading.
             last_value: Last known value for incremental loading.
+            filters: Key-value pairs for WHERE clause filtering (e.g. {"project_id": "..."}).
             limit: Optional row limit (for testing).
 
         Returns:
@@ -48,13 +52,25 @@ class BaseConnector(ABC):
         """
         engine = self.get_engine()
 
-        # Build query
+        # Build SELECT clause
         qualified_table = f"{schema}.{table}" if schema else table
-        query = f"SELECT * FROM {qualified_table}"
+        select_cols = ", ".join(columns) if columns else "*"
+        query = f"SELECT {select_cols} FROM {qualified_table}"
 
         conditions = []
+        params: dict = {}
+
+        # Tenant-level filters (e.g. project_id)
+        if filters:
+            for i, (col, val) in enumerate(filters.items()):
+                param_name = f"filter_{i}"
+                conditions.append(f"{col} = :{param_name}")
+                params[param_name] = val
+
+        # Incremental filter
         if incremental_column and last_value:
             conditions.append(f"{incremental_column} > :last_value")
+            params["last_value"] = last_value
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -62,22 +78,18 @@ class BaseConnector(ABC):
         if limit:
             query += f" LIMIT {limit}"
 
-        params = {}
-        if last_value:
-            params["last_value"] = last_value
-
         with engine.connect() as conn:
             result = conn.execute(text(query), params)
-            columns = list(result.keys())
+            result_columns = list(result.keys())
             rows = result.fetchall()
 
         if not rows:
             # Return empty table with column names
-            arrays = [pa.array([], type=pa.string()) for _ in columns]
-            return pa.table(dict(zip(columns, arrays)))
+            arrays = [pa.array([], type=pa.string()) for _ in result_columns]
+            return pa.table(dict(zip(result_columns, arrays)))
 
         # Convert to PyArrow Table
-        col_data = {col: [row[i] for row in rows] for i, col in enumerate(columns)}
+        col_data = {col: [row[i] for row in rows] for i, col in enumerate(result_columns)}
         return pa.table(col_data)
 
     def test_connection(self) -> bool:
