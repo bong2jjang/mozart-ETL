@@ -96,11 +96,11 @@ class TenantPipelineFactory:
         source_config = tenant["source"]
         storage_config = tenant["storage"]
 
-        asset_key = dg.AssetKey(["raw", tenant_id, table_name])
+        asset_key = dg.AssetKey([tenant_id, "input", table_name])
 
         @dg.asset(
             key=asset_key,
-            group_name=f"extract_{tenant_id}",
+            group_name=tenant_id,
             tags={
                 "dagster/kind/python": "",
                 "tenant": tenant_id,
@@ -156,25 +156,3 @@ class TenantPipelineFactory:
 
         return _extract
 
-    def build_schedules(self) -> list[dg.ScheduleDefinition]:
-        """Create per-tenant extraction schedules."""
-        schedules = []
-        for tenant in self.tenants:
-            tenant_id = tenant["id"]
-            cron = tenant.get("schedule", "0 */2 * * *")
-
-            # Select all assets for this tenant
-            job = dg.define_asset_job(
-                name=f"extract_{tenant_id}_job",
-                selection=dg.AssetSelection.groups(f"extract_{tenant_id}"),
-                tags={"tenant": tenant_id, "pipeline": "extract"},
-            )
-
-            schedule = dg.ScheduleDefinition(
-                name=f"extract_{tenant_id}_schedule",
-                job=job,
-                cron_schedule=cron,
-            )
-            schedules.append(schedule)
-
-        return schedules

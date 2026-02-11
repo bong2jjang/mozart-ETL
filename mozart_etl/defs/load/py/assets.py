@@ -32,18 +32,18 @@ def _create_load_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
     iceberg_schema = iceberg_config.get("schema", tenant_id)
     storage_config = tenant["storage"]
 
-    raw_key = dg.AssetKey(["raw", tenant_id, table_name])
-    iceberg_key = dg.AssetKey(["iceberg", tenant_id, table_name])
+    input_key = dg.AssetKey([tenant_id, "input", table_name])
+    transform_key = dg.AssetKey([tenant_id, "transform", table_name])
 
     @dg.asset(
-        key=iceberg_key,
-        deps=[raw_key],
-        group_name=f"load_{tenant_id}",
+        key=transform_key,
+        deps=[input_key],
+        group_name=tenant_id,
         tags={
             "dagster/kind/trino": "",
             "dagster/kind/iceberg": "",
             "tenant": tenant_id,
-            "pipeline": "load",
+            "pipeline": "transform",
         },
         automation_condition=dg.AutomationCondition.eager(),
     )
@@ -83,8 +83,8 @@ def _create_load_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
             }
         )
 
-    _load.__name__ = f"load_{tenant_id}_{table_name}"
-    _load.__qualname__ = f"load_{tenant_id}_{table_name}"
+    _load.__name__ = f"transform_{tenant_id}_{table_name}"
+    _load.__qualname__ = f"transform_{tenant_id}_{table_name}"
 
     return _load
 

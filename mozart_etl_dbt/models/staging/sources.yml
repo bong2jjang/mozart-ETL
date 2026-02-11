@@ -1,29 +1,24 @@
 version: 2
 
 sources:
-  - name: raw_sample
-    description: "Raw data extracted from sample tenant"
-    schema: sample
+  - name: project_01
+    description: "Iceberg tables for project_01 tenant"
     database: iceberg
+    schema: project_01
     tables:
-      - name: customers
-        description: "Customer master data"
-        columns:
-          - name: id
-            description: "Primary key"
-            tests:
-              - unique
-              - not_null
-          - name: updated_at
-            description: "Last update timestamp"
+      - name: cfg_item_master
+        description: "Item master configuration for project_01"
+        meta:
+          dagster:
+            asset_key: ["project_01", "transform", "cfg_item_master"]
 
-      - name: orders
-        description: "Order transactions"
-        columns:
-          - name: order_id
-            description: "Primary key"
-            tests:
-              - unique
-              - not_null
-          - name: created_at
-            description: "Order creation timestamp"
+  - name: project_02
+    description: "Iceberg tables for project_02 tenant"
+    database: iceberg
+    schema: project_02
+    tables:
+      - name: cfg_item_master
+        description: "Item master configuration for project_02"
+        meta:
+          dagster:
+            asset_key: ["project_02", "transform", "cfg_item_master"]

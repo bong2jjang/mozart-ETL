@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 import dagster as dg
-from dagster_dbt import DagsterDbtTranslator, DagsterDbtTranslatorSettings, DbtProject
+from dagster_dbt import DagsterDbtTranslator, DbtProject
 
 asset_is_new_or_updated = ~dg.AutomationCondition.in_progress() & (
     dg.AutomationCondition.code_version_changed() | dg.AutomationCondition.missing()
@@ -18,8 +18,10 @@ asset_is_new_or_updated_or_deps_updated = ~dg.AutomationCondition.in_progress() 
 class CustomDagsterDbtTranslator(DagsterDbtTranslator):
     """dbt-trino translator for Mozart ETL.
 
-    Translates dbt resource properties into Dagster asset specs with
-    Trino/Iceberg-specific conventions.
+    Maps dbt resources to Dagster asset specs:
+    - Sources: use meta.dagster.asset_key to link to transform assets
+    - Mart models: key=["output", name], group="output"
+    - Other models: key=[database, schema, name]
     """
 
     def _get_group_name_for_resource(self, dbt_props: Mapping[str, Any]) -> str:
@@ -28,6 +30,11 @@ class CustomDagsterDbtTranslator(DagsterDbtTranslator):
             return "snapshots"
 
         fqn = dbt_props.get("fqn", [])
+
+        # Mart models → "output" group
+        if len(fqn) >= 2 and fqn[1] == "mart":
+            return "output"
+
         asset_path = fqn[2:-1]
         if asset_path:
             return "_".join(asset_path)
@@ -38,10 +45,16 @@ class CustomDagsterDbtTranslator(DagsterDbtTranslator):
         meta = dbt_props.get("meta", {})
         dagster_meta = meta.get("dagster", {})
 
+        # Sources: use explicit asset_key from meta
         if "asset_key" in dagster_meta and resource_type == "source":
             return dg.AssetKey(dagster_meta["asset_key"])
 
-        # Use catalog.schema.name for Trino/Iceberg
+        # Mart models: map to ["output", name]
+        fqn = dbt_props.get("fqn", [])
+        if resource_type == "model" and len(fqn) >= 2 and fqn[1] == "mart":
+            return dg.AssetKey(["output", dbt_props["name"]])
+
+        # Default: catalog.schema.name for Trino/Iceberg
         return dg.AssetKey(
             [
                 dbt_props.get("database", "iceberg"),
@@ -65,8 +78,8 @@ class CustomDagsterDbtTranslator(DagsterDbtTranslator):
     def _get_automation_condition_for_resource(
         self, dbt_props: Mapping[str, Any]
     ) -> dg.AutomationCondition:
-        schema = dbt_props.get("schema", "")
-        if "mart" in schema.lower():
+        fqn = dbt_props.get("fqn", [])
+        if len(fqn) >= 2 and fqn[1] == "mart":
             return asset_is_new_or_updated_or_deps_updated
         return asset_is_new_or_updated
 
@@ -89,25 +102,3 @@ class CustomDagsterDbtTranslator(DagsterDbtTranslator):
             group_name=group_name,
             automation_condition=automation_condition,
         ).merge_attributes(metadata=metadata)
-
-
-class TenantPrefixedDbtTranslator(CustomDagsterDbtTranslator):
-    """Adds tenant prefix to asset keys for multi-tenant dbt models."""
-
-    def __init__(
-        self,
-        settings: DagsterDbtTranslatorSettings,
-        tenant_id: str,
-    ):
-        super().__init__(settings=settings)
-        self.tenant_id = tenant_id
-
-    def get_asset_spec(
-        self,
-        manifest: Mapping[str, Any],
-        unique_id: str,
-        project: Optional[DbtProject],
-    ) -> dg.AssetSpec:
-        base_spec = super().get_asset_spec(manifest, unique_id, project)
-        prefixed_key = base_spec.key.with_prefix(self.tenant_id)
-        return base_spec.replace_attributes(key=prefixed_key)
