@@ -1,11 +1,13 @@
-"""Shared resources and utilities for all code locations."""
+"""Shared resources and config utilities for all code locations."""
 
 import os
+import re
+from pathlib import Path
 
-import dagster as dg
+import yaml
 
-from mozart_etl.defs.common.resources import TrinoResource
 from mozart_etl.lib.storage.minio import S3Resource
+from mozart_etl.lib.trino import TrinoResource
 
 
 def get_shared_resources() -> dict:
@@ -32,3 +34,45 @@ def get_shared_resources() -> dict:
         "minio": s3,
         "trino": trino,
     }
+
+
+def _resolve_env_vars(value: str) -> str:
+    """Resolve ${VAR_NAME:default} patterns in config values."""
+    if not isinstance(value, str):
+        return value
+
+    pattern = r"\$\{(\w+)(?::([^}]*))?\}"
+
+    def replacer(match):
+        var_name = match.group(1)
+        default = match.group(2) if match.group(2) is not None else ""
+        return os.getenv(var_name, default)
+
+    return re.sub(pattern, replacer, value)
+
+
+def _resolve_config(config: dict) -> dict:
+    """Recursively resolve environment variables in a config dict."""
+    resolved = {}
+    for key, value in config.items():
+        if isinstance(value, dict):
+            resolved[key] = _resolve_config(value)
+        elif isinstance(value, str):
+            resolved[key] = _resolve_env_vars(value)
+        else:
+            resolved[key] = value
+    return resolved
+
+
+def load_tenant_config(config_path: Path) -> tuple[dict, list[dict]]:
+    """Load a single tenant's config from its own YAML file.
+
+    Returns:
+        (tenant_dict, tables_list) - resolved with env vars
+    """
+    with open(config_path) as f:
+        raw = yaml.safe_load(f)
+
+    tenant = _resolve_config(raw["tenant"])
+    tables = raw.get("tables", [])
+    return tenant, tables

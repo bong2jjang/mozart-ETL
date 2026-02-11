@@ -1,82 +1,135 @@
-# dbt 프로젝트 개요
+# Mozart ETL dbt 프로젝트
 
-이 문서는 dbt 프로젝트의 구조, 목적, 모범 사례를 설명합니다.
-LLM 기반 문서화, 쿼리 생성, 분석 지원을 위한 참고 자료입니다.
+## 개요
 
----
+이 dbt 프로젝트는 Mozart ETL의 **OUTPUT 레이어**를 담당합니다.
+테넌트별로 격리된 Iceberg 테이블을 UNION ALL하여 통합 mart 테이블을 생성합니다.
 
-## 1. 스테이징 레이어 (Staging)
-- **목적:** 새로운 원시 데이터를 추가합니다.
-- **구성:** 데이터 소스별 하위 디렉토리 (예: Google Search Console, LinkedIn Ads, Salesforce, Reddit Ads 등).
-- **처리:**
-  - 최소한의 변환만 수행합니다.
-  - 주로 **필드 이름 변경** 위주입니다.
-  - 이 단계에서는 추가적인 로직을 적용하지 않습니다.
-- **모범 사례:** 새 파일을 생성하기 전에 **기존 파일이 있는지 확인**하여 중복을 방지합니다.
+**엔진**: dbt-trino (Trino SQL 쿼리 엔진)
 
----
+> 현재 등록된 테넌트 목록: `dbt_project.yml`의 `vars.tenants` 참조
 
-## 2. 모델 레이어 (Models)
-- **목적:** 컨텍스트와 재사용 가능한 로직을 추가합니다.
-- **특성:** 일반적으로 스테이징 레이어와 **1:1 관계**입니다.
-- **처리:**
-  - **CASE 문** 및 기타 재사용 가능한 로직을 추가합니다.
-  - 불필요한 데이터를 제외하기 위한 **필터**를 적용합니다.
-- **출력:** **코어 레이어**로 전달됩니다.
-- **모범 사례:** 새 파일을 생성하기 전에 **기존 파일이 있는지 확인**하여 중복을 방지합니다.
+## 데이터 흐름
 
----
+```
+{tenant_A}.{table} (Iceberg) ──┐
+{tenant_B}.{table} (Iceberg) ──┼─→ mart_{table}_all (UNION ALL + tenant_id 컬럼)
+{tenant_C}.{table} (Iceberg) ──┘
+        ...
+```
 
-## 3. 코어 레이어 (Core)
-- **목적:** **차원(dimension) 테이블과 팩트(fact) 테이블**을 생성합니다.
-- **처리:**
-  - 데이터를 통합하고 표준화합니다.
-  - 다운스트림 레이어에서 재사용할 수 있도록 합니다.
-- **출력:** **리포팅 레이어**로 전달됩니다.
+upstream(Iceberg 테이블)은 Dagster의 transform 에셋이 생성합니다.
+이 dbt 프로젝트는 이들을 집계하는 mart 모델만 포함합니다.
 
----
+## 프로젝트 구조
 
-## 4. DWH 리포팅 레이어 (Reporting)
-- **목적:** 리포팅 및 분석을 위한 **최종 큐레이션된 데이터**를 제공합니다.
-- **접근:**
-  - 이것이 **최종 사용자에게 노출되는 지표**입니다.
-  - 다른 레이어는 **직접 노출되지 않습니다**.
-- **유지보수:**
-  - 여기 파일이 업데이트되면 **관련 YAML 파일도 반드시 업데이트**해야 합니다.
-  - YAML의 컬럼 정의는 **LLM과 BI 도구 모두에 반영**되어 시스템 간 일관된 정의를 보장합니다.
-- **모범 사례:** 새 테이블을 만드는 대신 **기존 테이블에 새 컬럼을 추가**하는 것을 선호합니다. **데이터 그레인(grain)이나 주제**가 새 테이블을 정당화하는 경우에만 생성합니다.
+```
+mozart_etl_dbt/
+├── dbt_project.yml           # 프로젝트 설정, vars.tenants 정의
+├── profiles.yml              # Trino 연결 (dev: 인증없음, prod: LDAP)
+├── dependencies.yml          # 외부 패키지 (dbt_utils 등)
+├── models/
+│   ├── staging/
+│   │   └── sources.yml       # 테넌트별 Iceberg source 선언
+│   └── mart/
+│       ├── mart_*.sql        # 통합 mart 모델
+│       └── schema.yml        # 모델 문서 + 테스트
+└── macros/
+    ├── union_tenants.sql     # ★ 핵심: 테넌트 UNION ALL 매크로
+    ├── get_custom_schema.sql # 스키마 이름 결정 로직
+    ├── get_custom_database.sql
+    ├── hash_string.sql       # SHA-512 해시 유틸
+    ├── limit_dates_for_dev.sql     # dev에서 날짜 범위 제한
+    ├── limit_dates_for_insights.sql
+    └── query_to_list.sql     # SQL 결과 → Jinja 리스트
+```
 
----
+## 핵심 매크로: union_tenants
 
-## 일반 규칙
-- 조인할 때는 **한 레이어 아래**로만 조인하는 것을 선호합니다.
-- 리포팅 레이어 모델이 변경되면 **YAML 파일을 업데이트**합니다.
-- 컬럼 정의는 LLM + BI 도구와 동기화를 유지해야 합니다.
+`dbt_project.yml`의 `vars.tenants` 목록을 순회하며 모든 테넌트의 동일 테이블을 UNION ALL합니다.
+`tenant_id` 컬럼이 자동으로 추가됩니다.
 
----
+```sql
+-- 사용법: {{ union_tenants('{table_name}') }}
+-- 결과: SELECT '{tenant_A}' AS tenant_id, t.* FROM source(...) UNION ALL SELECT '{tenant_B}' ...
+```
 
-## 제한 영역 (새 파일 추가 금지)
-- **Intermediate 레이어**
-- **Mart 디렉토리**
-- **Maps 디렉토리**
+테넌트가 추가/제거되면 `dbt_project.yml`의 `vars.tenants`만 수정하면 이 매크로를 사용하는 모든 mart에 자동 반영됩니다.
 
-이 영역에는 향후 통합될 **레거시 코드**가 포함되어 있습니다.
-여기에 새 파일을 추가해서는 안 됩니다.
+## 모델 레이어
 
----
+### sources (staging/sources.yml)
 
-## LLM 사용 참고 사항
-- 이 문서를 dbt 구조의 **진실의 원천(source of truth)**으로 사용합니다.
-- 쿼리를 생성할 때 **레이어 경계**를 준수합니다.
-- **리포팅 레이어**의 지표만 노출합니다.
-- **컬럼 정의**가 YAML 명세와 일치하는지 확인합니다.
-- 제한 영역에 새 파일을 생성하거나 제안하지 **않습니다**.
-- 스테이징과 모델에서 **중복 파일**을 피합니다.
-- 가능하면 기존 리포팅 테이블에 **컬럼을 추가**하는 것을 선호합니다.
+테넌트별 Iceberg 테이블을 dbt source로 선언합니다.
+`meta.dagster.asset_key`로 Dagster의 transform 에셋과 DAG를 연결합니다.
 
----
+```yaml
+# 패턴: 각 테넌트마다 source 블록 1개
+sources:
+  - name: {tenant_id}
+    database: iceberg
+    schema: {tenant_id}
+    tables:
+      - name: {table_name}
+        meta:
+          dagster:
+            asset_key: ["{tenant_id}", "transform", "{table_name}"]
+```
 
-## 데이터 흐름 예시
-**원시 소스 → 스테이징 → 모델 → 코어 → 리포팅**
+### mart (models/mart/)
 
----
+테넌트 데이터를 통합한 최종 테이블입니다. `materialized: table`로 설정됩니다.
+
+```sql
+-- mart_{table_name}_all.sql (패턴)
+{{ config(materialized='table') }}
+{{ union_tenants('{table_name}') }}
+```
+
+## Dagster 연동
+
+- `CustomDagsterDbtTranslator`가 dbt 리소스를 Dagster 에셋으로 매핑
+- mart 모델 → Asset Key: `["output", model_name]`, Group: `"output"`
+- source → `meta.dagster.asset_key` 값 사용 (upstream transform 에셋 연결)
+- 자동화: mart 모델은 deps 업데이트 시 자동 실행
+
+## 프로필 (profiles.yml)
+
+| 프로필 | 인증 | 스레드 | 용도 |
+|--------|------|--------|------|
+| dev | none (인증 없음) | 4 | 로컬 개발 |
+| prod | LDAP | 8 | 운영 환경 |
+
+환경변수: `TRINO_HOST`, `TRINO_PORT`, `TRINO_USER`, `TRINO_CATALOG`, `DBT_SCHEMA`, `DBT_TARGET`
+
+## 개발 명령어
+
+```bash
+dbt deps          # 패키지 설치
+dbt parse         # manifest 생성
+dbt build         # 모델 빌드 + 테스트
+dbt run           # 모델만 실행
+dbt test          # 테스트만 실행
+```
+
+## 확장 규칙
+
+### 신규 테넌트 추가 시
+
+1. `models/staging/sources.yml`에 테넌트 source 블록 추가
+2. `dbt_project.yml`의 `vars.tenants` 목록에 추가
+
+→ 기존 `union_tenants` 사용 mart 모델에 새 테넌트가 자동 포함됩니다.
+
+### 신규 mart 모델 추가 시
+
+1. `models/mart/mart_{name}.sql` 생성 — `{{ union_tenants('{table}') }}` 사용
+2. `models/mart/schema.yml`에 모델 문서 + 테스트 추가
+3. (필요시) `sources.yml`에 새 테이블 source 추가 (모든 테넌트에)
+
+## 규칙
+
+- **mart 모델만 작성**: staging/intermediate 모델 불필요 (upstream은 Dagster가 처리)
+- **`union_tenants` 매크로 활용**: 테넌트 통합이 필요한 모든 mart에서 사용
+- **schema.yml 동기화**: mart 모델 변경 시 schema.yml의 컬럼 정의/테스트도 업데이트
+- **`meta.dagster.asset_key` 필수**: 모든 source table에 Dagster 에셋 키 메타 명시

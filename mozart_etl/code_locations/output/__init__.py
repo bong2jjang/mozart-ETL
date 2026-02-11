@@ -1,5 +1,7 @@
 """Code location for output layer (dbt mart models)."""
 
+import shutil
+import sys
 from functools import cache
 from pathlib import Path
 
@@ -11,11 +13,23 @@ from mozart_etl.lib.dbt.translator import CustomDagsterDbtTranslator
 from mozart_etl.utils.environment_helpers import get_dbt_target
 
 
+def _find_dbt_executable() -> str:
+    """Find the dbt executable, checking the venv Scripts dir on Windows."""
+    found = shutil.which("dbt")
+    if found:
+        return found
+    # Fallback: look in the same venv as the running Python
+    venv_scripts = Path(sys.executable).parent / "dbt.exe"
+    if venv_scripts.exists():
+        return str(venv_scripts)
+    return "dbt"
+
+
 @cache
 def _dbt_project() -> DbtProject:
     project = DbtProject(
         project_dir=Path(__file__)
-        .joinpath("..", "..", "..", "mozart_etl_dbt")
+        .joinpath("..", "..", "..", "..", "mozart_etl_dbt")
         .resolve(),
         target=get_dbt_target(),
     )
@@ -55,7 +69,10 @@ output_schedule = dg.ScheduleDefinition(
 )
 
 resources = get_shared_resources()
-resources["dbt"] = DbtCliResource(project_dir=_dbt_project().project_dir)
+resources["dbt"] = DbtCliResource(
+    project_dir=_dbt_project().project_dir,
+    dbt_executable=_find_dbt_executable(),
+)
 
 defs = dg.Definitions(
     assets=[_get_dbt_models()],

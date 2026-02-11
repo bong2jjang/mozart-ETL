@@ -17,10 +17,6 @@ models:
       owners: ["team:data"]
 
   mozart_etl:
-    staging:
-      +materialized: view
-    intermediate:
-      +materialized: view
     mart:
       +materialized: table
 

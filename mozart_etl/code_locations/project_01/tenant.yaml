@@ -1,0 +1,42 @@
+tenant:
+  id: project_01
+  name: "PROJECT_01 (APS)"
+  source:
+    type: postgresql
+    host: "${PROJECT_01_DB_HOST:localhost}"
+    port: "${PROJECT_01_DB_PORT:5432}"
+    database: "${PROJECT_01_DB_NAME:mzc_aps}"
+    username: "${PROJECT_01_DB_USER:mzcadm}"
+    password: "${PROJECT_01_DB_PASSWORD:mzcadm}"
+  params:
+    project_id: "EED70012-E49D-4BA5-AD05-870C338DF39A"
+  storage:
+    bucket: "${S3_BUCKET_NAME:data-lake}"
+    prefix: "raw/project_01"
+  iceberg:
+    catalog: iceberg
+    schema: project_01
+  schedule: "0 */2 * * *"
+
+tables:
+  - name: cfg_item_master
+    source_schema: public
+    source_table: cfg_item_master
+    primary_key: [project_id, item_id]
+    columns:
+      - project_id
+      - item_id
+      - item_type
+      - item_name
+      - item_group_id
+      - description
+      - item_priority
+      - procurement_type
+      - prod_type
+      - item_size_type
+      - item_spec
+      - create_datetime
+      - update_datetime
+    tenant_filter: project_id
+    incremental_column: update_datetime
+    mode: incremental

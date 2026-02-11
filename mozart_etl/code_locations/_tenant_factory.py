@@ -1,34 +1,29 @@
-"""Factory to build per-tenant Dagster Definitions (one code location per tenant)."""
+"""Factory to build per-tenant Dagster Definitions from tenant-specific YAML."""
+
+from pathlib import Path
 
 import dagster as dg
 
 from mozart_etl.lib.extract.connectors import create_connector
-from mozart_etl.lib.extract.factory import load_tables_config, load_tenants_config
 from mozart_etl.lib.storage.minio import S3Resource
-from mozart_etl.defs.common.resources import TrinoResource
-from mozart_etl.code_locations._shared import get_shared_resources
+from mozart_etl.lib.trino import TrinoResource
+from mozart_etl.code_locations._shared import get_shared_resources, load_tenant_config
 
 
-def create_tenant_defs(tenant_id: str) -> dg.Definitions:
-    """Build a complete Definitions object for a single tenant.
+def create_tenant_defs(tenant_config_path: Path) -> dg.Definitions:
+    """Build a complete Definitions from a tenant-specific YAML file.
 
-    Includes:
-    - Input assets (extract: DB → S3/Parquet)
-    - Transform assets (load: S3 → Iceberg)
-    - Per-tenant pipeline job and schedule
-    - Shared resources (s3, trino)
+    Each tenant has its own tenant.yaml containing both connection info
+    and table definitions. This ensures zero cross-tenant coupling.
     """
-    tenants = load_tenants_config()
-    tables = load_tables_config()
-
-    tenant = next(t for t in tenants if t["id"] == tenant_id)
+    tenant, tables = load_tenant_config(tenant_config_path)
+    tenant_id = tenant["id"]
 
     assets = []
     for table in tables:
         assets.append(_create_extract_asset(tenant, table))
         assets.append(_create_transform_asset(tenant, table))
 
-    # Per-tenant pipeline job
     job = dg.define_asset_job(
         name=f"{tenant_id}_pipeline",
         selection=dg.AssetSelection.groups(tenant_id),
@@ -50,16 +45,13 @@ def create_tenant_defs(tenant_id: str) -> dg.Definitions:
 
 
 def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
-    """Create input (extract) asset: Source DB → S3/Parquet."""
     tenant_id = tenant["id"]
     table_name = table["name"]
     source_config = tenant["source"]
     storage_config = tenant["storage"]
 
-    asset_key = dg.AssetKey([tenant_id, "input", table_name])
-
     @dg.asset(
-        key=asset_key,
+        key=dg.AssetKey([tenant_id, "input", table_name]),
         group_name=tenant_id,
         tags={
             "dagster/kind/python": "",
@@ -93,17 +85,14 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
                 table_name=table_name,
             )
 
-            num_rows = arrow_table.num_rows
             context.log.info(
-                f"Extracted {num_rows} rows from {tenant_id}.{table_name} → {s3_path}"
+                f"Extracted {arrow_table.num_rows} rows → {s3_path}"
             )
-
             return dg.MaterializeResult(
                 metadata={
-                    "num_rows": dg.MetadataValue.int(num_rows),
+                    "num_rows": dg.MetadataValue.int(arrow_table.num_rows),
                     "s3_path": dg.MetadataValue.text(s3_path),
                     "tenant": dg.MetadataValue.text(tenant_id),
-                    "source_type": dg.MetadataValue.text(source_config["type"]),
                 }
             )
         finally:
@@ -115,19 +104,14 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
 
 
 def _create_transform_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
-    """Create transform (load) asset: S3/Parquet → Iceberg via Trino."""
     tenant_id = tenant["id"]
     table_name = table["name"]
-    iceberg_config = tenant.get("iceberg", {})
-    iceberg_schema = iceberg_config.get("schema", tenant_id)
+    iceberg_schema = tenant.get("iceberg", {}).get("schema", tenant_id)
     storage_config = tenant["storage"]
 
-    input_key = dg.AssetKey([tenant_id, "input", table_name])
-    transform_key = dg.AssetKey([tenant_id, "transform", table_name])
-
     @dg.asset(
-        key=transform_key,
-        deps=[input_key],
+        key=dg.AssetKey([tenant_id, "transform", table_name]),
+        deps=[dg.AssetKey([tenant_id, "input", table_name])],
         group_name=tenant_id,
         tags={
             "dagster/kind/trino": "",
