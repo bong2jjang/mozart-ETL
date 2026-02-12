@@ -11,7 +11,7 @@ tenant:
   params:
     project_id: "EED70012-E49D-4BA5-AD05-870C338DF39A"
   storage:
-    bucket: "${S3_BUCKET_NAME:data-lake}"
+    bucket: "${S3_BUCKET_NAME:warehouse}"
     prefix: "raw/project_01"
   iceberg:
     catalog: iceberg

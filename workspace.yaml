@@ -7,6 +7,3 @@ load_from:
       module_name: mozart_etl.code_locations.project_02
       location_name: project_02
 
-  - python_module:
-      module_name: mozart_etl.code_locations.output
-      location_name: output

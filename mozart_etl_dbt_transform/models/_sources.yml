@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: raw
+    description: "Raw Iceberg tables loaded from S3 Parquet (per-tenant)"
+    database: iceberg
+    schema: "{{ var('tenant_id', 'default') }}_raw"
+    tables:
+      - name: cfg_item_master
+        description: "Raw cfg_item_master loaded from S3 Parquet"

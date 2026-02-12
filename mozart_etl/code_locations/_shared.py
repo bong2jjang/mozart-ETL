@@ -2,6 +2,8 @@
 
 import os
 import re
+import shutil
+import sys
 from pathlib import Path
 
 import yaml
@@ -17,7 +19,7 @@ def get_shared_resources() -> dict:
         access_key=os.getenv("AWS_ACCESS_KEY_ID", ""),
         secret_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
         region=os.getenv("AWS_REGION", "us-east-1"),
-        bucket=os.getenv("S3_BUCKET_NAME", "data-lake"),
+        bucket=os.getenv("S3_BUCKET_NAME", "warehouse"),
     )
 
     trino = TrinoResource(
@@ -76,3 +78,14 @@ def load_tenant_config(config_path: Path) -> tuple[dict, list[dict]]:
     tenant = _resolve_config(raw["tenant"])
     tables = raw.get("tables", [])
     return tenant, tables
+
+
+def find_dbt_executable() -> str:
+    """Find the dbt executable, checking the venv Scripts dir on Windows."""
+    found = shutil.which("dbt")
+    if found:
+        return found
+    venv_scripts = Path(sys.executable).parent / "dbt.exe"
+    if venv_scripts.exists():
+        return str(venv_scripts)
+    return "dbt"

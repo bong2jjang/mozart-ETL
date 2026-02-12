@@ -2,103 +2,39 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 import dagster as dg
-from dagster_dbt import DagsterDbtTranslator, DbtProject
-
-asset_is_new_or_updated = ~dg.AutomationCondition.in_progress() & (
-    dg.AutomationCondition.code_version_changed() | dg.AutomationCondition.missing()
-)
-
-asset_is_new_or_updated_or_deps_updated = ~dg.AutomationCondition.in_progress() & (
-    dg.AutomationCondition.code_version_changed()
-    | dg.AutomationCondition.missing()
-    | dg.AutomationCondition.any_deps_updated()
-)
+from dagster_dbt import DagsterDbtTranslator
 
 
-class CustomDagsterDbtTranslator(DagsterDbtTranslator):
-    """dbt-trino translator for Mozart ETL.
+class TransformDagsterDbtTranslator(DagsterDbtTranslator):
+    """Per-tenant dbt translator for TRANSFORM + OUTPUT layers.
 
-    Maps dbt resources to Dagster asset specs:
-    - Sources: use meta.dagster.asset_key to link to transform assets
-    - Mart models: key=["output", name], group="output"
-    - Other models: key=[database, schema, name]
+    Asset key mapping:
+    - Sources (raw): [tenant_id, "input", table_name]
+    - Transform models: [tenant_id, "transform", model_name]
+    - Output models: [tenant_id, "output", model_name]
     """
 
-    def _get_group_name_for_resource(self, dbt_props: Mapping[str, Any]) -> str:
-        resource_type = dbt_props["resource_type"]
-        if resource_type == "snapshot":
-            return "snapshots"
+    def __init__(self, tenant_id: str, settings=None):
+        self._tenant_id = tenant_id
+        super().__init__(settings=settings)
 
-        fqn = dbt_props.get("fqn", [])
+    def get_asset_key(self, dbt_resource_props: Mapping[str, Any]) -> dg.AssetKey:
+        resource_type = dbt_resource_props["resource_type"]
+        name = dbt_resource_props["name"]
 
-        # Mart models → "output" group
-        if len(fqn) >= 2 and fqn[1] == "mart":
-            return "output"
+        if resource_type == "source":
+            return dg.AssetKey([self._tenant_id, "input", name])
 
-        asset_path = fqn[2:-1]
-        if asset_path:
-            return "_".join(asset_path)
-        return "default"
+        fqn = dbt_resource_props.get("fqn", [])
+        if len(fqn) >= 2 and fqn[1] == "output":
+            return dg.AssetKey([self._tenant_id, "output", name])
 
-    def _get_asset_key_for_resource(self, dbt_props: Mapping[str, Any]) -> dg.AssetKey:
-        resource_type = dbt_props["resource_type"]
-        meta = dbt_props.get("meta", {})
-        dagster_meta = meta.get("dagster", {})
+        return dg.AssetKey([self._tenant_id, "transform", name])
 
-        # Sources: use explicit asset_key from meta
-        if "asset_key" in dagster_meta and resource_type == "source":
-            return dg.AssetKey(dagster_meta["asset_key"])
+    def get_group_name(self, dbt_resource_props: Mapping[str, Any]) -> Optional[str]:
+        return self._tenant_id
 
-        # Mart models: map to ["output", name]
-        fqn = dbt_props.get("fqn", [])
-        if resource_type == "model" and len(fqn) >= 2 and fqn[1] == "mart":
-            return dg.AssetKey(["output", dbt_props["name"]])
-
-        # Default: catalog.schema.name for Trino/Iceberg
-        return dg.AssetKey(
-            [
-                dbt_props.get("database", "iceberg"),
-                dbt_props["schema"],
-                dbt_props["name"],
-            ]
-        )
-
-    def _get_metadata_for_resource(self, dbt_props: Mapping[str, Any]) -> Mapping[str, Any]:
-        resource_type = dbt_props["resource_type"]
-        if resource_type != "model":
-            return {}
-
-        catalog = dbt_props.get("database", "iceberg")
-        schema = dbt_props["schema"]
-        name = dbt_props["name"]
-        return {
-            "trino_table": dg.MetadataValue.text(f"{catalog}.{schema}.{name}"),
-        }
-
-    def _get_automation_condition_for_resource(
-        self, dbt_props: Mapping[str, Any]
-    ) -> dg.AutomationCondition:
-        fqn = dbt_props.get("fqn", [])
-        if len(fqn) >= 2 and fqn[1] == "mart":
-            return asset_is_new_or_updated_or_deps_updated
-        return asset_is_new_or_updated
-
-    def get_asset_spec(
-        self,
-        manifest: Mapping[str, Any],
-        unique_id: str,
-        project: Optional[DbtProject],
-    ) -> dg.AssetSpec:
-        base_spec = super().get_asset_spec(manifest, unique_id, project)
-        dbt_props = self.get_resource_props(manifest, unique_id)
-
-        group_name = self._get_group_name_for_resource(dbt_props)
-        asset_key = self._get_asset_key_for_resource(dbt_props)
-        metadata = self._get_metadata_for_resource(dbt_props)
-        automation_condition = self._get_automation_condition_for_resource(dbt_props)
-
-        return base_spec.replace_attributes(
-            key=asset_key,
-            group_name=group_name,
-            automation_condition=automation_condition,
-        ).merge_attributes(metadata=metadata)
+    def get_automation_condition(
+        self, dbt_resource_props: Mapping[str, Any]
+    ) -> Optional[dg.AutomationCondition]:
+        return dg.AutomationCondition.eager()

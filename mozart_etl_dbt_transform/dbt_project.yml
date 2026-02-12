@@ -1,0 +1,18 @@
+name: "mozart_etl_transform"
+version: "1.0.0"
+config-version: 2
+
+profile: "mozart_etl"
+model-paths: ["models"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  mozart_etl_transform:
+    transform:
+      +materialized: table
+    output:
+      +materialized: table

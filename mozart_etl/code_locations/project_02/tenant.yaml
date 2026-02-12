@@ -11,7 +11,7 @@ tenant:
   params:
     project_id: "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
   storage:
-    bucket: "${S3_BUCKET_NAME:data-lake}"
+    bucket: "${S3_BUCKET_NAME:warehouse}"
     prefix: "raw/project_02"
   iceberg:
     catalog: iceberg
