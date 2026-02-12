@@ -1,6 +1,6 @@
 {{ config(
     materialized='table',
-    schema=var('tenant_id', 'default')
+    schema=var('tenant_id', 'project_02')
 ) }}
 
 SELECT
@@ -17,7 +17,7 @@ SELECT
     item_spec,
     create_datetime,
     update_datetime
-FROM {{ source('raw', 'cfg_item_master') }}
+FROM {{ source('project_02_raw', 'cfg_item_master') }}
 {% if var('project_id', none) is not none %}
 WHERE project_id = '{{ var("project_id") }}'
 {% endif %}

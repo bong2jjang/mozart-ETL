@@ -14,19 +14,19 @@ dbt mart로 최종 테이블을 생성합니다. 모든 단계가 테넌트별 �
 ```
 ┌──────────┐    ┌───────────┐    ┌───────────────┐    ┌──────────┐
 │1.Source DB │───▶│2.MinIO/S3  │───▶│3.Trino/Iceberg │───▶│4.dbt mart │
-│(per tenant)│    │(Parquet)  │    │ (transformed) │    │(per tenant)│
+│(per tenant)│    │(Parquet)  │    │  (staging)    │    │(per tenant)│
 └──────────┘    └───────────┘    └───────────────┘    └──────────┘
-   [INPUT]       + Iceberg raw     [TRANSFORM]          [OUTPUT]
+   [INPUT]       + Iceberg raw      [STAGING]            [OUTPUT]
   extract+load   {tid}_raw.*       dbt SQL 변환          dbt mart
 ```
 
 ### Dagster UI 구조
 
 ```
-Code Locations:                        # workspace.yaml에 정의
+Code Locations:                        # workspace.yaml (auto-generated)
 ├── {tenant_id}                        # 테넌트별 독립 프로세스 (N개)
 │   ├── input/{table_name}             #   RDB → S3 Parquet + Iceberg raw table
-│   ├── transform/{table_name}         #   dbt SQL 변환 → Iceberg table
+│   ├── staging/stg_{table_name}       #   dbt staging 변환 → Iceberg table
 │   └── output/mart_{table_name}       #   dbt mart → Iceberg table (per-tenant)
 ```
 
@@ -34,18 +34,26 @@ Code Locations:                        # workspace.yaml에 정의
 
 ```
 dagster-open-platform/
-├── workspace.yaml                     # Dagster 멀티 코드 로케이션 정의
+├── workspace.yaml                     # ★ 자동 생성 (sync_tenants.py)
+├── Makefile                           # dev 워크플로 (sync → parse → dev)
 ├── docker-compose.yml                 # MinIO + Trino + Iceberg REST + PostgreSQL
 ├── pyproject.toml                     # 패키지 설정
 ├── .env                               # 환경변수 (DB 접속, S3, Trino 등)
+│
+├── scripts/
+│   └── sync_tenants.py                # ★ 자동 생성: workspace.yaml + __init__.py + dbt_project.yml
 │
 ├── mozart_etl/                        # 메인 Python 패키지
 │   ├── code_locations/                # Dagster 코드 로케이션
 │   │   ├── _shared.py                 #   공통 리소스 + 설정 로딩 + dbt 유틸
 │   │   ├── _tenant_factory.py         #   테넌트 Definitions 팩토리
 │   │   └── {tenant_id}/              #   ★ 테넌트별 격리 패키지 (N개)
-│   │       ├── __init__.py            #     엔트리: create_tenant_defs(tenant.yaml)
-│   │       └── tenant.yaml            #     연결정보 + 테이블 정의
+│   │       ├── __init__.py            #     ★ 자동 생성 (sync_tenants.py)
+│   │       ├── tenant.yaml            #     연결정보 + 테이블 정의
+│   │       └── models/                #     ★ 테넌트별 dbt 모델
+│   │           ├── _sources.yml       #       raw Iceberg source ({tid}_raw)
+│   │           ├── staging/           #       변환 모델 ({tid}__stg_*.sql)
+│   │           └── mart/              #       mart 모델 ({tid}__mart_*.sql)
 │   ├── lib/                           # 공유 라이브러리
 │   │   ├── trino.py                   #   TrinoResource (DDL/DQL)
 │   │   ├── dbt/translator.py          #   TransformDagsterDbtTranslator
@@ -56,15 +64,16 @@ dagster-open-platform/
 │   └── utils/
 │       └── environment_helpers.py     # 환경 감지 (LOCAL/BRANCH/PROD)
 │
-├── mozart_etl_dbt_transform/          # dbt-trino 프로젝트 (TRANSFORM + OUTPUT)
-│   ├── dbt_project.yml                #   변환/출력 모델 설정
+├── mozart_etl_dbt_transform/          # dbt-trino 프로젝트 (공유 인프라)
+│   ├── dbt_project.yml                #   ★ 자동 생성 (model-paths에 테넌트 경로)
 │   ├── profiles.yml                   #   Trino 연결 (dev/prod)
 │   ├── macros/
 │   │   └── generate_schema_name.sql   #   커스텀 스키마 (prefix 없음)
-│   └── models/
-│       ├── _sources.yml               #   raw Iceberg source ({{ var('tenant_id') }}_raw)
-│       ├── transform/                 #   변환 모델 (테이블당 1개)
-│       └── output/                    #   mart 모델 (per-tenant)
+│   ├── PRODUCT_SCHEMA.md              #   제품 표준 출력 스키마 정의
+│   └── models/                        #   공유 모델 (테넌트 모델은 code_locations/)
+│
+├── docs/                              # 설계 문서
+│   └── tenant-onboarding-architecture.md
 │
 └── docker/                            # Docker 설정
     ├── trino/catalog/                 #   Iceberg 카탈로그 설정
@@ -92,11 +101,18 @@ docker compose up -d
 # 3. 환경변수 설정
 cp .env.example .env   # 또는 기존 .env 사용
 
-# 4. dbt 파싱
-cd mozart_etl_dbt_transform && dbt parse && cd ..
+# 4. Makefile 사용 (권장)
+make dev               # sync → dbt-parse → dagster dev (한 번에)
+```
 
-# 5. Dagster 시작 (멀티 코드 로케이션)
-dagster dev -w workspace.yaml
+### Makefile 명령어
+
+```bash
+make sync          # 테넌트 동기화 (workspace.yaml + __init__.py + dbt_project.yml)
+make dbt-parse     # sync + dbt 파싱
+make dev           # sync + dbt 파싱 + Dagster 시작
+make validate      # sync + dbt 파싱 + 정의 검증
+make check-sync    # CI: 동기화 상태 확인
 ```
 
 ### VS Code 실행
@@ -112,7 +128,7 @@ dagster dev -w workspace.yaml
 
 ```bash
 # 전체 workspace 검증
-dagster definitions validate -w workspace.yaml
+make validate
 
 # 개별 코드 로케이션 검증
 dagster definitions validate -m mozart_etl.code_locations.{tenant_id}
@@ -126,6 +142,8 @@ dagster definitions validate -m mozart_etl.code_locations.{tenant_id}
 
 - **독립 설정**: `tenant.yaml`에 연결정보 + 테이블 정의 포함
 - **독립 프로세스**: workspace.yaml에서 별도 code location으로 실행
+- **독립 dbt 모델**: 테넌트별 staging/mart 모델 (소스 테이블이 다를 수 있음)
+- **표준 출력**: 모든 테넌트의 mart 모델은 동일한 제품 표준 스키마 준수 (`PRODUCT_SCHEMA.md`)
 - **교차 영향 없음**: 한 테넌트 수정이 다른 테넌트에 영향 없음
 
 ```yaml
@@ -165,16 +183,28 @@ tables:
 | 단계 | Asset Key | 설명 |
 |------|-----------|------|
 | **INPUT** | `[tenant_id, "input", table]` | 소스 DB에서 추출 → S3 Parquet + Iceberg raw 테이블 적재 |
-| **TRANSFORM** | `[tenant_id, "transform", model]` | dbt SQL 변환 → Trino/Iceberg 변환 테이블 생성 |
-| **OUTPUT** | `[tenant_id, "output", model]` | dbt mart → Trino/Iceberg 최종 테이블 (per-tenant) |
+| **STAGING** | `[tenant_id, "staging", stg_model]` | dbt staging 변환 → Trino/Iceberg 변환 테이블 생성 |
+| **OUTPUT** | `[tenant_id, "output", mart_model]` | dbt mart → Trino/Iceberg 최종 테이블 (per-tenant, 표준 스키마) |
 
 ### Iceberg 스키마 규칙
 
 | 레이어 | 스키마 | 예시 |
 |--------|--------|------|
 | INPUT (raw) | `iceberg.{tenant_id}_raw` | `iceberg.project_01_raw.cfg_item_master` |
-| TRANSFORM | `iceberg.{tenant_id}` | `iceberg.project_01.cfg_item_master` |
-| OUTPUT | `iceberg.{tenant_id}` | `iceberg.project_01.mart_cfg_item_master` |
+| STAGING | `iceberg.{tenant_id}` | `iceberg.project_01.stg_cfg_item_master` |
+| OUTPUT | `iceberg.{tenant_id}` | `iceberg.project_01.mart_item_master` |
+
+### dbt 모델 네이밍
+
+테넌트별 dbt 모델은 전역 고유성을 위해 prefix 규칙을 따릅니다:
+
+| 항목 | 규칙 | 예시 |
+|------|------|------|
+| 파일명 | `{tid}__{layer}_{entity}.sql` | `project_01__stg_cfg_item_master.sql` |
+| dbt 모델명 | `{tid}__{layer}_{entity}` | `project_01__stg_cfg_item_master` |
+| 물리 테이블명 | `alias` config (mart만) | `mart_item_master` |
+| Asset Key | prefix 제거 후 매핑 | `[project_01, "staging", stg_cfg_item_master]` |
+| dbt source | `{tid}_raw` | `project_01_raw` |
 
 ### 리소스
 
@@ -182,45 +212,33 @@ tables:
 |--------|------|
 | `S3Resource` | MinIO/S3 호환 스토리지 (Parquet 읽기/쓰기) |
 | `TrinoResource` | Trino 쿼리 엔진 (DDL/DQL 실행) |
-| `DbtCliResource` | dbt-trino CLI 실행 (transform + output) |
-
-### dbt 프로젝트
-
-| 프로젝트 | 역할 |
-|----------|------|
-| `mozart_etl_dbt_transform/` | TRANSFORM + OUTPUT — 테넌트별 독립 실행 |
-
-- `{{ var('tenant_id') }}`로 스키마 동적 지정
-- `models/transform/`: SQL 변환 모델 (raw → transformed)
-- `models/output/`: mart 모델 (transformed → final)
+| `DbtCliResource` | dbt-trino CLI 실행 (staging + output) |
 
 ## 신규 테넌트 추가
 
-새 테넌트를 추가하려면 다음 파일만 수정합니다:
+새 테넌트를 추가하려면 `code_locations/` 하위만 수정합니다:
 
-| 파일 | 작업 |
-|------|------|
-| `mozart_etl/code_locations/{tenant_id}/tenant.yaml` | 테넌트 설정 + 테이블 정의 생성 |
-| `mozart_etl/code_locations/{tenant_id}/__init__.py` | 엔트리포인트 생성 (아래 3줄) |
-| `workspace.yaml` | 코드 로케이션 등록 |
+| 단계 | 파일 | 설명 |
+|------|------|------|
+| 1 | `code_locations/{tid}/tenant.yaml` | 연결정보 + 테이블 정의 생성 |
+| 2 | `code_locations/{tid}/models/_sources.yml` | dbt source 정의 (`{tid}_raw`) |
+| 3 | `code_locations/{tid}/models/staging/{tid}__stg_*.sql` | staging 모델 |
+| 4 | `code_locations/{tid}/models/mart/{tid}__mart_*.sql` | mart 모델 (`alias` + 표준 스키마) |
+| 5 | `make sync` 실행 | workspace.yaml + __init__.py + dbt_project.yml 자동 생성 |
 
-> `mozart_etl_dbt_transform/`은 `{{ var('tenant_id') }}`로 동적이므로 변경 불필요.
-
-```python
-# code_locations/{tenant_id}/__init__.py  (모든 테넌트 동일)
-from pathlib import Path
-from mozart_etl.code_locations._tenant_factory import create_tenant_defs
-defs = create_tenant_defs(Path(__file__).parent / "tenant.yaml")
-```
+> `workspace.yaml`, `__init__.py`, `dbt_project.yml`은 직접 편집하지 마세요. `scripts/sync_tenants.py`가 자동 관리합니다.
 
 ## 신규 테이블 추가
 
-| 파일 | 작업 |
-|------|------|
-| `tenant.yaml`의 `tables` | 테이블 정의 추가 |
-| `mozart_etl_dbt_transform/models/transform/{table}.sql` | dbt 변환 모델 추가 |
-| `mozart_etl_dbt_transform/models/output/mart_{table}.sql` | dbt mart 모델 추가 |
-| `mozart_etl_dbt_transform/models/_sources.yml` | raw source 테이블 추가 |
+기존 테넌트에 새 테이블을 추가:
+
+| 단계 | 파일 | 설명 |
+|------|------|------|
+| 1 | `tenant.yaml`의 `tables` | 테이블 정의 추가 |
+| 2 | `models/_sources.yml` | raw source 테이블 추가 |
+| 3 | `models/staging/{tid}__stg_{table}.sql` | staging 모델 추가 |
+| 4 | `models/mart/{tid}__mart_{table}.sql` | mart 모델 추가 (`PRODUCT_SCHEMA.md` 참조) |
+| 5 | `make dbt-parse` 실행 | dbt manifest 갱신 |
 
 ## 신규 DB 커넥터 추가
 

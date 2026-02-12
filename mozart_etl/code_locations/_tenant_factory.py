@@ -22,12 +22,14 @@ TRANSFORM_DBT_DIR = Path(__file__).joinpath(
     "..", "..", "..", "mozart_etl_dbt_transform"
 ).resolve()
 
+CODE_LOCATIONS_DIR = Path(__file__).parent
+
 
 @cache
 def _get_transform_dbt_project() -> DbtProject:
     """Shared DbtProject for all tenants.
 
-    All tenants share the same manifest since the dbt models are identical.
+    All tenants share the same manifest since model-paths includes all tenant dirs.
     Per-tenant behavior comes from TransformDagsterDbtTranslator and --vars at runtime.
     """
     project = DbtProject(
@@ -36,6 +38,21 @@ def _get_transform_dbt_project() -> DbtProject:
     )
     project.prepare_if_dev()
     return project
+
+
+def _get_tenant_dbt_select(tenant_id: str) -> str:
+    """Build dbt select string by scanning tenant's models directory.
+
+    Returns space-separated model names for @dbt_assets(select=...).
+    """
+    models_dir = CODE_LOCATIONS_DIR / tenant_id / "models"
+    if not models_dir.exists():
+        return ""
+    model_names = []
+    for sql_file in models_dir.rglob("*.sql"):
+        if not sql_file.stem.startswith("_"):
+            model_names.append(sql_file.stem)
+    return " ".join(sorted(model_names))
 
 
 def create_tenant_defs(tenant_config_path: Path) -> dg.Definitions:
@@ -52,7 +69,8 @@ def create_tenant_defs(tenant_config_path: Path) -> dg.Definitions:
         assets.append(_create_extract_asset(tenant, table))
 
     dbt_transform = _create_dbt_transform_assets(tenant, tables)
-    assets.append(dbt_transform)
+    if dbt_transform is not None:
+        assets.append(dbt_transform)
 
     resources = get_shared_resources()
     resources["dbt"] = DbtCliResource(
@@ -83,8 +101,6 @@ def create_tenant_defs(tenant_config_path: Path) -> dg.Definitions:
 def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
     """Create an asset that extracts data from source DB to S3 Parquet
     and loads it into a raw Iceberg table.
-
-    Combines the old INPUT + RAW steps into a single asset.
     """
     tenant_id = tenant["id"]
     table_name = table["name"]
@@ -176,24 +192,23 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
 
 def _create_dbt_transform_assets(
     tenant: dict, tables: list[dict]
-) -> dg.AssetsDefinition:
-    """Create dbt transform + output assets for a tenant.
+) -> dg.AssetsDefinition | None:
+    """Create dbt staging + mart assets for a tenant.
 
-    Uses the shared mozart_etl_dbt_transform project with --vars for
-    per-tenant schema routing. Includes both transform and output models.
+    Scans the tenant's models/ directory to discover dbt model files,
+    then uses @dbt_assets to register them with Dagster.
     """
     tenant_id = tenant["id"]
-    table_names = [t["name"] for t in tables]
     dbt_project = _get_transform_dbt_project()
+
+    select_str = _get_tenant_dbt_select(tenant_id)
+    if not select_str:
+        return None
 
     translator = TransformDagsterDbtTranslator(
         tenant_id=tenant_id,
         settings=DagsterDbtTranslatorSettings(enable_code_references=False),
     )
-
-    # Select transform models + corresponding mart output models
-    select_parts = table_names + [f"mart_{n}" for n in table_names]
-    select_str = " ".join(select_parts)
 
     @dbt_assets(
         manifest=dbt_project.manifest_path,
