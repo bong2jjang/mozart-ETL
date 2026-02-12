@@ -20,6 +20,7 @@ def get_shared_resources() -> dict:
         secret_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
         region=os.getenv("AWS_REGION", "us-east-1"),
         bucket=os.getenv("S3_BUCKET_NAME", "warehouse"),
+        verify_ssl=os.getenv("S3_VERIFY_SSL", "true").lower() == "true",
     )
 
     trino = TrinoResource(

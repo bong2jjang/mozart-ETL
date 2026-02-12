@@ -1,10 +1,13 @@
 """Factory to build per-tenant Dagster Definitions from tenant-specific YAML."""
 
 import json
+import logging
 from functools import cache
 from pathlib import Path
 
 import dagster as dg
+import pyarrow as pa
+from dagster import Output
 from dagster_dbt import DagsterDbtTranslatorSettings, DbtCliResource, DbtProject, dbt_assets
 
 from mozart_etl.code_locations._shared import (
@@ -18,11 +21,81 @@ from mozart_etl.lib.storage.minio import S3Resource
 from mozart_etl.lib.trino import TrinoResource
 from mozart_etl.utils.environment_helpers import get_dbt_target
 
+logger = logging.getLogger(__name__)
+
 TRANSFORM_DBT_DIR = Path(__file__).joinpath(
     "..", "..", "..", "mozart_etl_dbt_transform"
 ).resolve()
 
 CODE_LOCATIONS_DIR = Path(__file__).parent
+
+PREVIEW_MAX_ROWS = 5
+
+
+def _pyarrow_to_trino_type(pa_type) -> str:
+    """Map a PyArrow type to a Trino SQL type string."""
+    if pa.types.is_boolean(pa_type):
+        return "BOOLEAN"
+    if pa.types.is_int8(pa_type) or pa.types.is_int16(pa_type):
+        return "SMALLINT"
+    if pa.types.is_int32(pa_type):
+        return "INTEGER"
+    if pa.types.is_int64(pa_type):
+        return "BIGINT"
+    if pa.types.is_float32(pa_type):
+        return "REAL"
+    if pa.types.is_float64(pa_type):
+        return "DOUBLE"
+    if pa.types.is_decimal(pa_type):
+        return f"DECIMAL({pa_type.precision}, {pa_type.scale})"
+    if pa.types.is_date(pa_type):
+        return "DATE"
+    if pa.types.is_timestamp(pa_type):
+        return "TIMESTAMP"
+    if pa.types.is_time(pa_type):
+        return "TIME"
+    return "VARCHAR"
+
+
+def _build_column_defs(arrow_schema) -> str:
+    """Build SQL column definitions from a PyArrow schema."""
+    cols = []
+    for field in arrow_schema:
+        trino_type = _pyarrow_to_trino_type(field.type)
+        cols.append(f'    "{field.name}" {trino_type}')
+    return ",\n".join(cols)
+
+
+def _build_arrow_preview(arrow_table: pa.Table) -> dict:
+    """Build column schema + sample rows metadata from a PyArrow Table."""
+    columns = [
+        dg.TableColumn(name=field.name, type=str(field.type))
+        for field in arrow_table.schema
+    ]
+    sample = arrow_table.slice(0, min(PREVIEW_MAX_ROWS, arrow_table.num_rows))
+    df = sample.to_pandas()
+    return {
+        "dagster/column_schema": dg.TableSchema(columns=columns),
+        "preview": dg.MetadataValue.md(df.to_markdown(index=False)),
+    }
+
+
+def _build_trino_preview(trino: TrinoResource, relation_name: str) -> dict:
+    """Query Trino for sample rows and return markdown preview metadata."""
+    try:
+        columns, rows = trino.query_preview(relation_name, limit=PREVIEW_MAX_ROWS)
+        if not rows:
+            return {}
+        header = "| " + " | ".join(columns) + " |"
+        separator = "| " + " | ".join(["---"] * len(columns)) + " |"
+        body = "\n".join(
+            "| " + " | ".join(str(v) for v in row) + " |"
+            for row in rows
+        )
+        return {"preview": dg.MetadataValue.md(f"{header}\n{separator}\n{body}")}
+    except Exception as e:
+        logger.warning("Failed to build Trino preview for %s: %s", relation_name, e)
+        return {}
 
 
 @cache
@@ -148,40 +221,64 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
         finally:
             connector.close()
 
-        # 2) S3 Parquet → Iceberg raw table
-        bucket = storage_config["bucket"]
-        prefix = storage_config["prefix"]
-        s3a_path = f"s3a://{bucket}/{prefix}/{table_name}/"
+        # 2) S3 Parquet → Iceberg raw table (via Hive bridge)
+        #    Iceberg doesn't support external_location, so we:
+        #    a) Create a temporary Hive external table pointing to S3 Parquet
+        #    b) CTAS or INSERT INTO Iceberg from the Hive table
+        #    c) Drop the temporary Hive table
+        s3_dir = s3_path.replace("s3://", "s3a://").rsplit("/", 1)[0] + "/"
+        col_defs = _build_column_defs(arrow_table.schema)
 
-        trino.execute_ddl(f"CREATE SCHEMA IF NOT EXISTS iceberg.{raw_schema}")
+        hive_schema = f"hive.{raw_schema}"
+        hive_bridge = f"hive.{raw_schema}.__bridge_{table_name}"
         full_table = f"iceberg.{raw_schema}.{table_name}"
 
+        # 2a) Hive external table → read S3 Parquet
+        trino.execute_ddl(f"CREATE SCHEMA IF NOT EXISTS {hive_schema}")
+        trino.execute_ddl(f"DROP TABLE IF EXISTS {hive_bridge}")
+        trino.execute_ddl(f"""
+            CREATE TABLE {hive_bridge} (
+{col_defs}
+            ) WITH (
+                external_location = '{s3_dir}',
+                format = 'PARQUET'
+            )
+        """)
+
+        # 2b) Iceberg table from Hive bridge
+        trino.execute_ddl(f"CREATE SCHEMA IF NOT EXISTS iceberg.{raw_schema}")
+
         if table.get("mode") == "incremental":
+            # First run: create table; subsequent: append
             trino.execute_ddl(f"""
-                CREATE TABLE IF NOT EXISTS {full_table} (
-                    dummy VARCHAR
-                ) WITH (
-                    external_location = '{s3a_path}',
-                    format = 'PARQUET'
-                )
+                CREATE TABLE IF NOT EXISTS {full_table}
+                WITH (format = 'PARQUET')
+                AS SELECT * FROM {hive_bridge} WHERE 1=0
             """)
+            trino.execute_ddl(f"DELETE FROM {full_table}")
+            trino.execute_ddl(f"INSERT INTO {full_table} SELECT * FROM {hive_bridge}")
         else:
             trino.execute_ddl(f"DROP TABLE IF EXISTS {full_table}")
             trino.execute_ddl(f"""
                 CREATE TABLE {full_table}
                 WITH (format = 'PARQUET')
-                AS SELECT 1 as placeholder
+                AS SELECT * FROM {hive_bridge}
             """)
+
+        # 2c) Cleanup temporary Hive bridge table
+        trino.execute_ddl(f"DROP TABLE IF EXISTS {hive_bridge}")
 
         context.log.info(
             f"Extracted {arrow_table.num_rows} rows → {s3_path} → {full_table}"
         )
+        preview_meta = _build_arrow_preview(arrow_table)
         return dg.MaterializeResult(
             metadata={
                 "num_rows": dg.MetadataValue.int(arrow_table.num_rows),
                 "s3_path": dg.MetadataValue.text(s3_path),
                 "iceberg_table": dg.MetadataValue.text(full_table),
                 "tenant": dg.MetadataValue.text(tenant_id),
+                **preview_meta,
             }
         )
 
@@ -210,17 +307,34 @@ def _create_dbt_transform_assets(
         settings=DagsterDbtTranslatorSettings(enable_code_references=False),
     )
 
+    manifest_data = json.loads(dbt_project.manifest_path.read_text())
+
     @dbt_assets(
         manifest=dbt_project.manifest_path,
         select=select_str,
         dagster_dbt_translator=translator,
         project=dbt_project,
     )
-    def tenant_dbt_transform(context: dg.AssetExecutionContext, dbt: DbtCliResource):
-        yield from dbt.cli(
+    def tenant_dbt_transform(
+        context: dg.AssetExecutionContext, dbt: DbtCliResource, trino: TrinoResource
+    ):
+        invocation = dbt.cli(
             ["build", "--vars", json.dumps({"tenant_id": tenant_id, **tenant.get("params", {})})],
             context=context,
-        ).stream()
+        )
+        for event in invocation.stream().fetch_row_counts().fetch_column_metadata():
+            if isinstance(event, Output) and "unique_id" in event.metadata:
+                unique_id = event.metadata["unique_id"].text
+                node = manifest_data["nodes"].get(unique_id)
+                if node and node["config"]["materialized"] != "view":
+                    relation_name = node.get("relation_name")
+                    if relation_name:
+                        sample_meta = _build_trino_preview(trino, relation_name)
+                        if sample_meta:
+                            event = event.with_metadata(
+                                {**event.metadata, **sample_meta}
+                            )
+            yield event
 
     tenant_dbt_transform.__name__ = f"dbt_transform_{tenant_id}"
     tenant_dbt_transform.__qualname__ = f"dbt_transform_{tenant_id}"

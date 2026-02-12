@@ -41,3 +41,19 @@ class TrinoResource(dg.ConfigurableResource):
             cursor.execute(sql)
         finally:
             conn.close()
+
+    def query_preview(self, table_name: str, limit: int = 5) -> tuple[list[str], list[tuple]]:
+        """Query sample rows with column names for UI preview.
+
+        Returns:
+            (column_names, rows) tuple.
+        """
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM {table_name} LIMIT {limit}")
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            return columns, rows
+        finally:
+            conn.close()
