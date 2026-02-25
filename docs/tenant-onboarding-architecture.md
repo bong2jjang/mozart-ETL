@@ -31,7 +31,7 @@ project_02/input/product_master   → project_02/staging/stg_product_master  →
 ## 2. 디렉토리 구조
 
 ```
-dagster-open-platform/
+mozart-etl/
 ├── workspace.yaml                         # ★ 자동 생성
 ├── Makefile                               # dev, sync, validate 명령
 ├── scripts/

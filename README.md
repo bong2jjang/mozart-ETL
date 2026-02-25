@@ -33,7 +33,7 @@ Code Locations:                        # workspace.yaml (auto-generated)
 ## 프로젝트 구조
 
 ```
-dagster-open-platform/
+mozart-etl/
 ├── workspace.yaml                     # ★ 자동 생성 (sync_tenants.py)
 ├── Makefile                           # dev 워크플로 (sync → parse → dev)
 ├── docker-compose.yml                 # MinIO + Trino + Iceberg REST + PostgreSQL

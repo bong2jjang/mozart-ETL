@@ -109,7 +109,9 @@ def _get_transform_dbt_project() -> DbtProject:
         project_dir=TRANSFORM_DBT_DIR,
         target=get_dbt_target(),
     )
-    project.prepare_if_dev()
+    # Skip prepare_if_dev() on Windows to avoid dbt.exe execution issues
+    # Manifest will be parsed manually before starting Dagster
+    # project.prepare_if_dev()
     return project
 
 
@@ -136,19 +138,27 @@ def create_tenant_defs(tenant_config_path: Path) -> dg.Definitions:
     """
     tenant, tables = load_tenant_config(tenant_config_path)
     tenant_id = tenant["id"]
+    logger.info("[%s] Loading tenant definitions from %s", tenant_id, tenant_config_path)
 
     assets: list = []
     for table in tables:
         assets.append(_create_extract_asset(tenant, table))
+    logger.info("[%s] Registered %d extract assets", tenant_id, len(assets))
 
     dbt_transform = _create_dbt_transform_assets(tenant, tables)
     if dbt_transform is not None:
         assets.append(dbt_transform)
+        logger.info("[%s] Registered dbt transform assets", tenant_id)
+    else:
+        logger.info("[%s] No dbt models found, skipping transform assets", tenant_id)
 
     resources = get_shared_resources()
+    # DbtCliResource with explicit dbt executable path (Docker wrapper script)
+    dbt_path = find_dbt_executable()
+    logger.info("[%s] Using dbt executable: %s", tenant_id, dbt_path)
     resources["dbt"] = DbtCliResource(
         project_dir=TRANSFORM_DBT_DIR,
-        dbt_executable=find_dbt_executable(),
+        dbt_executable=dbt_path,
     )
 
     job = dg.define_asset_job(
@@ -163,6 +173,10 @@ def create_tenant_defs(tenant_config_path: Path) -> dg.Definitions:
         cron_schedule=tenant.get("schedule", "0 */2 * * *"),
     )
 
+    logger.info(
+        "[%s] Definitions ready: %d assets, schedule=%s",
+        tenant_id, len(assets), tenant.get("schedule", "0 */2 * * *"),
+    )
     return dg.Definitions(
         assets=assets,
         jobs=[job],
@@ -196,6 +210,12 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
         ),
     )
     def _extract(context: dg.AssetExecutionContext, s3: S3Resource, trino: TrinoResource):
+        context.log.info(
+            "[%s] Step 1/3: Extracting '%s' from %s://%s:%s/%s",
+            tenant_id, table_name, source_config["type"],
+            source_config["host"], source_config["port"], source_config["database"],
+        )
+
         # 1) RDB → S3 Parquet
         connector = create_connector(source_config)
         try:
@@ -204,6 +224,10 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
             tenant_params = tenant.get("params", {})
             if tenant_filter_col and tenant_filter_col in tenant_params:
                 filters = {tenant_filter_col: tenant_params[tenant_filter_col]}
+                context.log.info(
+                    "[%s] Applying filter: %s = %s",
+                    tenant_id, tenant_filter_col, tenant_params[tenant_filter_col],
+                )
 
             arrow_table = connector.extract_table(
                 schema=table["source_schema"],
@@ -212,12 +236,22 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
                 incremental_column=table.get("incremental_column"),
                 filters=filters,
             )
+            context.log.info(
+                "[%s] Extracted %d rows, %d columns from %s.%s",
+                tenant_id, arrow_table.num_rows, arrow_table.num_columns,
+                table["source_schema"], table["source_table"],
+            )
 
+            context.log.info(
+                "[%s] Step 2/3: Writing Parquet to S3 (prefix=%s/%s)",
+                tenant_id, storage_config["prefix"], table_name,
+            )
             s3_path = s3.write_parquet(
                 table=arrow_table,
                 prefix=storage_config["prefix"],
                 table_name=table_name,
             )
+            context.log.info("[%s] Parquet written to %s", tenant_id, s3_path)
         finally:
             connector.close()
 
@@ -226,6 +260,10 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
         #    a) Create a temporary Hive external table pointing to S3 Parquet
         #    b) CTAS or INSERT INTO Iceberg from the Hive table
         #    c) Drop the temporary Hive table
+        context.log.info(
+            "[%s] Step 3/3: Loading into Iceberg via Hive bridge (mode=%s)",
+            tenant_id, table.get("mode", "full"),
+        )
         s3_dir = s3_path.replace("s3://", "s3a://").rsplit("/", 1)[0] + "/"
         col_defs = _build_column_defs(arrow_table.schema)
 
@@ -234,6 +272,7 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
         full_table = f"iceberg.{raw_schema}.{table_name}"
 
         # 2a) Hive external table → read S3 Parquet
+        context.log.info("[%s]   2a) Creating Hive bridge: %s → %s", tenant_id, hive_bridge, s3_dir)
         trino.execute_ddl(f"CREATE SCHEMA IF NOT EXISTS {hive_schema}")
         trino.execute_ddl(f"DROP TABLE IF EXISTS {hive_bridge}")
         trino.execute_ddl(f"""
@@ -249,6 +288,7 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
         trino.execute_ddl(f"CREATE SCHEMA IF NOT EXISTS iceberg.{raw_schema}")
 
         if table.get("mode") == "incremental":
+            context.log.info("[%s]   2b) Incremental load → %s", tenant_id, full_table)
             # First run: create table; subsequent: append
             trino.execute_ddl(f"""
                 CREATE TABLE IF NOT EXISTS {full_table}
@@ -258,6 +298,7 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
             trino.execute_ddl(f"DELETE FROM {full_table}")
             trino.execute_ddl(f"INSERT INTO {full_table} SELECT * FROM {hive_bridge}")
         else:
+            context.log.info("[%s]   2b) Full replace → %s", tenant_id, full_table)
             trino.execute_ddl(f"DROP TABLE IF EXISTS {full_table}")
             trino.execute_ddl(f"""
                 CREATE TABLE {full_table}
@@ -267,9 +308,11 @@ def _create_extract_asset(tenant: dict, table: dict) -> dg.AssetsDefinition:
 
         # 2c) Cleanup temporary Hive bridge table
         trino.execute_ddl(f"DROP TABLE IF EXISTS {hive_bridge}")
+        context.log.info("[%s]   2c) Hive bridge cleaned up", tenant_id)
 
         context.log.info(
-            f"Extracted {arrow_table.num_rows} rows → {s3_path} → {full_table}"
+            "[%s] Done: %d rows → %s → %s",
+            tenant_id, arrow_table.num_rows, s3_path, full_table,
         )
         preview_meta = _build_arrow_preview(arrow_table)
         return dg.MaterializeResult(
@@ -318,23 +361,35 @@ def _create_dbt_transform_assets(
     def tenant_dbt_transform(
         context: dg.AssetExecutionContext, dbt: DbtCliResource, trino: TrinoResource
     ):
+        dbt_vars = {"tenant_id": tenant_id, **tenant.get("params", {})}
+        context.log.info("[%s] dbt build starting (select=%s)", tenant_id, select_str)
+        context.log.info("[%s] dbt vars: %s", tenant_id, json.dumps(dbt_vars))
+
         invocation = dbt.cli(
-            ["build", "--vars", json.dumps({"tenant_id": tenant_id, **tenant.get("params", {})})],
+            ["build", "--vars", json.dumps(dbt_vars)],
             context=context,
         )
+        model_count = 0
         for event in invocation.stream().fetch_row_counts().fetch_column_metadata():
             if isinstance(event, Output) and "unique_id" in event.metadata:
                 unique_id = event.metadata["unique_id"].text
+                model_count += 1
                 node = manifest_data["nodes"].get(unique_id)
-                if node and node["config"]["materialized"] != "view":
-                    relation_name = node.get("relation_name")
-                    if relation_name:
+                if node:
+                    materialized = node["config"]["materialized"]
+                    relation_name = node.get("relation_name", "N/A")
+                    context.log.info(
+                        "[%s] Model %d completed: %s (%s) → %s",
+                        tenant_id, model_count, node["name"], materialized, relation_name,
+                    )
+                    if materialized != "view" and relation_name:
                         sample_meta = _build_trino_preview(trino, relation_name)
                         if sample_meta:
                             event = event.with_metadata(
                                 {**event.metadata, **sample_meta}
                             )
             yield event
+        context.log.info("[%s] dbt build finished: %d models processed", tenant_id, model_count)
 
     tenant_dbt_transform.__name__ = f"dbt_transform_{tenant_id}"
     tenant_dbt_transform.__qualname__ = f"dbt_transform_{tenant_id}"

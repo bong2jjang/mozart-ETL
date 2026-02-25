@@ -33,7 +33,7 @@ Source DB  →  MinIO/S3 (Parquet) + Iceberg raw  →  dbt staging 변환  →  
 ## 저장소 구조
 
 ```
-dagster-open-platform/
+mozart-etl/
 ├── workspace.yaml                     # ★ 자동 생성 (sync_tenants.py)
 ├── Makefile                           # dev 워크플로 (sync → dbt-parse → dagster dev)
 ├── scripts/

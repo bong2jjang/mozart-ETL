@@ -1,5 +1,6 @@
 """Shared resources and config utilities for all code locations."""
 
+import logging
 import os
 import re
 import shutil
@@ -11,9 +12,17 @@ import yaml
 from mozart_etl.lib.storage.minio import S3Resource
 from mozart_etl.lib.trino import TrinoResource
 
+logger = logging.getLogger(__name__)
+
 
 def get_shared_resources() -> dict:
     """Return the common resource definitions used across all code locations."""
+    logger.info(
+        "[shared] Initializing resources (Trino=%s:%s, S3=%s)",
+        os.getenv("TRINO_HOST", "localhost"),
+        os.getenv("TRINO_PORT", "8080"),
+        os.getenv("S3_ENDPOINT_URL", ""),
+    )
     s3 = S3Resource(
         endpoint_url=os.getenv("S3_ENDPOINT_URL", ""),
         access_key=os.getenv("AWS_ACCESS_KEY_ID", ""),
@@ -73,20 +82,50 @@ def load_tenant_config(config_path: Path) -> tuple[dict, list[dict]]:
     Returns:
         (tenant_dict, tables_list) - resolved with env vars
     """
+    logger.info("[shared] Loading tenant config: %s", config_path)
     with open(config_path) as f:
         raw = yaml.safe_load(f)
 
     tenant = _resolve_config(raw["tenant"])
     tables = raw.get("tables", [])
+    table_names = [t["name"] for t in tables]
+    logger.info(
+        "[shared] Tenant '%s' loaded: %d tables (%s)",
+        tenant["id"], len(tables), ", ".join(table_names),
+    )
     return tenant, tables
 
 
 def find_dbt_executable() -> str:
-    """Find the dbt executable, checking the venv Scripts dir on Windows."""
+    """Find the dbt executable, checking the venv Scripts dir on Windows.
+
+    On Windows with Git Bash, uses a wrapper script (.venv/Scripts/dbt.bat)
+    that calls a bash script which executes dbt in Docker to avoid Windows
+    compatibility issues.
+    """
+    # Check venv Scripts directory
+    # On Windows, prefer .bat wrapper which is recognized as executable
+    scripts_dir = Path(sys.executable).parent
+    if sys.platform == "win32":
+        venv_dbt = scripts_dir / "dbt.bat"
+        if venv_dbt.exists():
+            absolute_path = str(venv_dbt.resolve())
+            logger.info("[shared] dbt found in venv: %s", absolute_path)
+            return absolute_path
+
+    # Unix or fallback
+    venv_dbt = scripts_dir / "dbt"
+    if venv_dbt.exists():
+        absolute_path = str(venv_dbt.resolve())
+        logger.info("[shared] dbt found in venv: %s", absolute_path)
+        return absolute_path
+
+    # Check PATH
     found = shutil.which("dbt")
     if found:
-        return found
-    venv_scripts = Path(sys.executable).parent / "dbt.exe"
-    if venv_scripts.exists():
-        return str(venv_scripts)
+        absolute_path = str(Path(found).resolve())
+        logger.info("[shared] dbt found via PATH: %s", absolute_path)
+        return absolute_path
+
+    logger.warning("[shared] dbt not found, falling back to 'dbt'")
     return "dbt"

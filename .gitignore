@@ -1,6 +1,9 @@
 # Virtual environment
 .venv/
 venv/
+# Keep dbt Docker wrapper (executable without extension)
+!.venv/Scripts/dbt
+!.venv/Scripts/dbt.bat
 
 # Environment variables (secrets)
 .env
@@ -14,14 +17,15 @@ build/
 *.egg
 
 # dbt
-dagster_open_platform_dbt/target/
-dagster_open_platform_dbt/logs/
-dagster_open_platform_dbt/dbt_packages/
+mozart_etl_dbt_transform/target/
+mozart_etl_dbt_transform/logs/
+mozart_etl_dbt_transform/dbt_packages/
 
 # Dagster
 .tmp_dagster_home*/
 storage/
 history/
+dagster_dev.log
 
 # IDE
 .idea/

@@ -1,6 +1,10 @@
 """Trino query engine resource."""
 
+import logging
+
 import dagster as dg
+
+logger = logging.getLogger(__name__)
 
 
 class TrinoResource(dg.ConfigurableResource):
@@ -26,15 +30,21 @@ class TrinoResource(dg.ConfigurableResource):
         )
 
     def execute(self, sql: str, params=None) -> list:
+        sql_preview = sql.strip().replace("\n", " ")[:120]
+        logger.info("[Trino] execute: %s", sql_preview)
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(sql, params)
-            return cursor.fetchall()
+            rows = cursor.fetchall()
+            logger.info("[Trino] execute: returned %d rows", len(rows))
+            return rows
         finally:
             conn.close()
 
     def execute_ddl(self, sql: str):
+        sql_preview = sql.strip().replace("\n", " ")[:120]
+        logger.info("[Trino] DDL: %s", sql_preview)
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -48,12 +58,14 @@ class TrinoResource(dg.ConfigurableResource):
         Returns:
             (column_names, rows) tuple.
         """
+        logger.info("[Trino] preview: SELECT * FROM %s LIMIT %d", table_name, limit)
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM {table_name} LIMIT {limit}")
             columns = [desc[0] for desc in cursor.description]
             rows = cursor.fetchall()
+            logger.info("[Trino] preview: %d columns, %d rows", len(columns), len(rows))
             return columns, rows
         finally:
             conn.close()
