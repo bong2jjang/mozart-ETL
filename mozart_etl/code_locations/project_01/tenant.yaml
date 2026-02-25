@@ -37,6 +37,55 @@ tables:
       - item_spec
       - create_datetime
       - update_datetime
+      - create_user_id
+      - update_user_id
+    tenant_filter: project_id
+    incremental_column: update_datetime
+    mode: incremental
+
+  - name: cfg_demand
+    source_schema: public
+    source_table: cfg_demand
+    primary_key: [project_id, demand_ver, demand_id]
+    columns:
+      - project_id
+      - demand_ver
+      - demand_id
+      - item_id
+      - site_id
+      - buffer_id
+      - due_date
+      - demand_qty
+      - demand_priority
+      - demand_type
+      - demand_group_id
+      - cust_id
+      - max_lateness_day
+      - max_earliness_day
+      - description
+    tenant_filter: project_id
+    mode: full
+
+  - name: cfg_bom_master
+    source_schema: public
+    source_table: cfg_bom_master
+    primary_key: [project_id, bom_id]
+    columns:
+      - project_id
+      - bom_id
+      - bom_type
+      - bom_priority
+      - eff_start_datetime
+      - eff_end_datetime
+      - create_datetime
+      - update_datetime
+      - description
+      - demand_item_id
+      - create_user_id
+      - update_user_id
+      - prop01
+      - prop02
+      - prop03
     tenant_filter: project_id
     incremental_column: update_datetime
     mode: incremental

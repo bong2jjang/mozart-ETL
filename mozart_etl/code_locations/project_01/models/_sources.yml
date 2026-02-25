@@ -8,3 +8,9 @@ sources:
     tables:
       - name: cfg_item_master
         description: "Raw cfg_item_master from source DB"
+
+      - name: cfg_demand
+        description: "Raw cfg_demand from source DB"
+
+      - name: cfg_bom_master
+        description: "Raw cfg_bom_master from source DB"
