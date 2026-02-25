@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: project_01_raw
+    description: "project_01 raw Iceberg tables"
+    database: iceberg
+    schema: "{{ var('tenant_id', 'project_01') }}_raw"
+    tables:
+      - name: cfg_item_master
+        description: "Raw cfg_item_master from source DB"
+
+      - name: cfg_demand
+        description: "Raw cfg_demand from source DB"
+
+      - name: cfg_bom_master
+        description: "Raw cfg_bom_master from source DB"
